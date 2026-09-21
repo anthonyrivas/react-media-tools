@@ -275,6 +275,7 @@
   width: 100%;
   height: 100%;
   color: var(--rmt-on-stage);
+  --rmt-fg: var(--rmt-on-stage);
 }
 
 .rmt-editor__mixer {
