@@ -149,3 +149,13 @@ export function IconDownload() {
     </IconSvg>
   );
 }
+
+export function IconMute() {
+  return (
+    <IconSvg>
+      <path d="M4 9.5v5h3.2L12 18.5v-13L7.2 9.5H4z" />
+      <path d="m15 9 6 6" />
+      <path d="m21 9-6 6" />
+    </IconSvg>
+  );
+}

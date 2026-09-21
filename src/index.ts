@@ -12,4 +12,5 @@ export type {
 export { detectCapabilities, pickAudioMimeType, pickMimeType, extensionForMime } from "./browser";
 export { VideoRecorder, type VideoRecorderHandle, type VideoRecorderProps } from "./recorder/VideoRecorder";
 export { AudioRecorder, type AudioRecorderHandle, type AudioRecorderProps } from "./recorder/AudioRecorder";
+export { AudioEditor, type AudioEditorHandle, type AudioEditorProps } from "./editor/AudioEditor";
 export { VideoEditor, type VideoEditorHandle, type VideoEditorProps } from "./editor/VideoEditor";

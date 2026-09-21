@@ -257,6 +257,57 @@
   min-height: 160px;
 }
 
+.rmt-editor--audio .rmt-editor__preview {
+  height: 220px;
+  min-height: 180px;
+}
+
+.rmt-editor__audio {
+  position: absolute;
+  width: 0;
+  height: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.rmt-editor__wave-stage {
+  display: block;
+  width: 100%;
+  height: 100%;
+  color: var(--rmt-on-stage);
+}
+
+.rmt-editor__mixer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.rmt-editor__gain {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 160px;
+  flex: 1;
+  color: var(--rmt-fg-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.rmt-editor__gain input[type="range"] {
+  flex: 1;
+  min-width: 80px;
+  accent-color: var(--rmt-accent);
+}
+
+.rmt-editor__gain-value {
+  min-width: 3.4em;
+  font-family: var(--rmt-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--rmt-fg);
+}
+
 .rmt-recorder__canvas,
 .rmt-editor__video {
   display: block;
