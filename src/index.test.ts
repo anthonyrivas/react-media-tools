@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  AudioRecorder,
   VideoEditor,
   VideoRecorder,
   detectCapabilities,
@@ -11,6 +12,7 @@ import {
 describe("package exports", () => {
   it("exposes the public components and helpers", () => {
     expect(VideoRecorder).toBeDefined();
+    expect(AudioRecorder).toBeDefined();
     expect(VideoEditor).toBeDefined();
     expect(typeof detectCapabilities).toBe("function");
     expect(typeof pickMimeType).toBe("function");

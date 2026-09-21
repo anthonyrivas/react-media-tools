@@ -252,6 +252,11 @@
   border-radius: calc(var(--rmt-radius) - 6px);
 }
 
+.rmt-recorder--audio .rmt-recorder__stage {
+  height: 180px;
+  min-height: 160px;
+}
+
 .rmt-recorder__canvas,
 .rmt-editor__video {
   display: block;
@@ -350,6 +355,7 @@
   position: absolute;
   top: 12px;
   left: 12px;
+  z-index: 2;
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -810,6 +816,11 @@
   .rmt-editor__preview {
     height: 220px;
     min-height: 220px;
+  }
+
+  .rmt-recorder--audio .rmt-recorder__stage {
+    height: 160px;
+    min-height: 160px;
   }
 
   .rmt-recorder__actions,
