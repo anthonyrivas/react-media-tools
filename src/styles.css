@@ -613,6 +613,10 @@
   cursor: ew-resize;
 }
 
+.rmt-clip.is-muted {
+  opacity: 0.58;
+}
+
 .rmt-clip.is-drop-target {
   box-shadow: inset 3px 0 0 var(--rmt-accent);
 }
@@ -712,6 +716,58 @@
   border-radius: 1px;
   background: var(--rmt-trim-mark);
   transform: translate(-50%, -50%);
+}
+
+.rmt-clip__fade {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 2;
+  pointer-events: none;
+  opacity: 0.5;
+}
+
+.rmt-clip__fade--in {
+  left: 0;
+  background: linear-gradient(to right, var(--rmt-stage-bg), transparent);
+}
+
+.rmt-clip__fade--out {
+  right: 0;
+  background: linear-gradient(to left, var(--rmt-stage-bg), transparent);
+}
+
+.rmt-clip__fade-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 3;
+  width: 12px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: ew-resize;
+  touch-action: none;
+}
+
+.rmt-clip__fade-handle--in {
+  margin-left: -6px;
+}
+
+.rmt-clip__fade-handle--out {
+  left: auto;
+  margin-right: -6px;
+}
+
+.rmt-clip__fade-handle::after {
+  content: "";
+  position: absolute;
+  top: 18%;
+  bottom: 18%;
+  left: 5px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--rmt-accent);
 }
 
 .rmt-timeline__playhead {
