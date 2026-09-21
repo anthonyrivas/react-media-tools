@@ -1,0 +1,67 @@
+{
+  "name": "@anthonyrivas/react-media-tools",
+  "version": "0.1.0",
+  "description": "In-browser React video recorder and editor components.",
+  "license": "MIT",
+  "author": "Anthony Rivas",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/anthonyrivas/react-media-tools.git"
+  },
+  "bugs": {
+    "url": "https://github.com/anthonyrivas/react-media-tools/issues"
+  },
+  "homepage": "https://github.com/anthonyrivas/react-media-tools#readme",
+  "keywords": [
+    "react",
+    "video",
+    "recorder",
+    "editor",
+    "mediabunny",
+    "webcodecs",
+    "timeline"
+  ],
+  "type": "module",
+  "sideEffects": [
+    "**/*.css"
+  ],
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./styles.css": "./dist/styles.css"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "dev": "vite",
+    "build": "rm -rf dist && tsc -p tsconfig.lib.json && vite build --config vite.lib.config.ts && cp src/styles.css dist/styles.css",
+    "build:demo": "vite build",
+    "preview": "vite preview",
+    "prepublishOnly": "npm run build"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "peerDependencies": {
+    "react": ">=18",
+    "react-dom": ">=18"
+  },
+  "dependencies": {
+    "mediabunny": "^1.58.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.11"
+  }
+}
