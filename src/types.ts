@@ -32,6 +32,13 @@ export type RecordingResult = {
   height: number;
 };
 
+export type AudioRecordingResult = {
+  blob: Blob;
+  mimeType: string;
+  filename: string;
+  durationMs: number;
+};
+
 export type EditorInput = {
   id?: string;
   file: Blob;

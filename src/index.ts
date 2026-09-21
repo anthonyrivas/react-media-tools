@@ -1,4 +1,5 @@
 export type {
+  AudioRecordingResult,
   BrowserCapabilities,
   CameraOverlay,
   EditorClip,
@@ -8,6 +9,6 @@ export type {
   RecordingResult,
   SourceName,
 } from "./types";
-export { detectCapabilities, pickMimeType, extensionForMime } from "./browser";
+export { detectCapabilities, pickAudioMimeType, pickMimeType, extensionForMime } from "./browser";
 export { VideoRecorder, type VideoRecorderHandle, type VideoRecorderProps } from "./recorder/VideoRecorder";
 export { VideoEditor, type VideoEditorHandle, type VideoEditorProps } from "./editor/VideoEditor";
