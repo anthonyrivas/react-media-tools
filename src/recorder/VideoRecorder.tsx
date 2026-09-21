@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import {
   forwardRef,
   useCallback,
@@ -7,6 +8,8 @@ import {
   useRef,
   useState,
 } from "react";
+import { IconButton } from "../IconButton";
+import { IconCamera, IconDownload, IconMic, IconPause, IconPlay, IconScreen, IconSpeaker } from "../icons";
 import type { CameraOverlay, RecordingResult, SourceName } from "../types";
 import { downloadBlob, formatClock } from "../utils";
 import { MediaComposer, type ComposerSnapshot } from "./MediaComposer";
@@ -263,6 +266,7 @@ export const VideoRecorder = forwardRef<VideoRecorderHandle, VideoRecorderProps>
             <div className="rmt-recorder__sources" role="group" aria-label="Capture sources">
               <SourceToggle
                 label="Camera"
+                icon={<IconCamera />}
                 pressed={snap.camera}
                 disabled={!snap.capabilities.camera || busy}
                 title={snap.capabilities.notes.camera}
@@ -270,6 +274,7 @@ export const VideoRecorder = forwardRef<VideoRecorderHandle, VideoRecorderProps>
               />
               <SourceToggle
                 label="Screen"
+                icon={<IconScreen />}
                 pressed={snap.screen}
                 disabled={!snap.capabilities.screen || busy}
                 title={snap.capabilities.notes.screen}
@@ -277,6 +282,7 @@ export const VideoRecorder = forwardRef<VideoRecorderHandle, VideoRecorderProps>
               />
               <SourceToggle
                 label="Microphone"
+                icon={<IconMic />}
                 pressed={snap.microphone || (wantMic && !live)}
                 disabled={!snap.capabilities.microphone || busy}
                 title={snap.capabilities.notes.microphone}
@@ -288,6 +294,7 @@ export const VideoRecorder = forwardRef<VideoRecorderHandle, VideoRecorderProps>
               />
               <SourceToggle
                 label="System audio"
+                icon={<IconSpeaker />}
                 pressed={snap.systemAudio}
                 disabled={!snap.capabilities.systemAudio || busy}
                 title={
@@ -301,14 +308,14 @@ export const VideoRecorder = forwardRef<VideoRecorderHandle, VideoRecorderProps>
 
             <div className="rmt-recorder__actions" role="group" aria-label="Recording actions">
               {snap.status === "recording" && canPause && (
-                <button type="button" className="rmt-btn" onClick={pause} disabled={busy}>
-                  Pause
-                </button>
+                <IconButton label="Pause" disabled={busy} onClick={pause}>
+                  <IconPause />
+                </IconButton>
               )}
               {snap.status === "paused" && (
-                <button type="button" className="rmt-btn" onClick={resume} disabled={busy}>
-                  Resume
-                </button>
+                <IconButton label="Resume" disabled={busy} onClick={resume}>
+                  <IconPlay />
+                </IconButton>
               )}
               {live ? (
                 <button
@@ -336,14 +343,13 @@ export const VideoRecorder = forwardRef<VideoRecorderHandle, VideoRecorderProps>
                 </button>
               )}
               {showDownload && (
-                <button
-                  type="button"
-                  className="rmt-btn"
-                  onClick={() => download()}
+                <IconButton
+                  label="Download"
                   disabled={!snap.hasRecording || live || busy}
+                  onClick={() => download()}
                 >
-                  Download
-                </button>
+                  <IconDownload />
+                </IconButton>
               )}
             </div>
           </div>
@@ -364,27 +370,21 @@ function SourceToggle({
   pressed,
   disabled,
   title,
+  icon,
   onClick,
 }: {
   label: string;
   pressed: boolean;
   disabled?: boolean;
   title?: string;
+  icon: ReactNode;
   onClick: () => void;
 }) {
   const hint = title?.trim();
+  const name = hint ? `${label}. ${hint}` : label;
   return (
-    <button
-      type="button"
-      className="rmt-toggle"
-      aria-pressed={pressed}
-      aria-label={hint ? `${label}. ${hint}` : undefined}
-      disabled={disabled}
-      title={hint}
-      onClick={onClick}
-    >
-      <span className="rmt-toggle__mark" aria-hidden="true" />
-      {label}
-    </button>
+    <IconButton label={name} pressed={pressed} disabled={disabled} title={name} onClick={onClick}>
+      {icon}
+    </IconButton>
   );
 }

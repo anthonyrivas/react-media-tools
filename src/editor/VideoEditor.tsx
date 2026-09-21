@@ -13,6 +13,8 @@ import { exportTimeline } from "./exportTimeline";
 import { cloneSnapshot, createHistory, sameClips, type EditorSnapshot } from "./history";
 import { extractThumbnail, probeMedia } from "./probe";
 import { Timeline, type TimelineHandle, type TimelineSource } from "./Timeline";
+import { IconButton } from "../IconButton";
+import { IconDownload, IconOpen, IconPause, IconPlay, IconRedo, IconSplit, IconTrash, IconUndo } from "../icons";
 import { extractPeaks } from "./waveform";
 import {
   FRAME_MS,
@@ -826,23 +828,23 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
       >
         <div className="rmt-editor__toolbar" role="toolbar" aria-label="Editor tools">
           <div className="rmt-editor__tools">
-            <ToolButton label="Split" shortcut="S" disabled={!clips.length} onClick={split}>
+            <IconButton label="Split" shortcut="S" disabled={!clips.length} onClick={split}>
               <IconSplit />
-            </ToolButton>
-            <ToolButton label="Delete" shortcut="Delete" disabled={!selected} onClick={deleteSelected}>
+            </IconButton>
+            <IconButton label="Delete" shortcut="Delete" disabled={!selected} onClick={deleteSelected}>
               <IconTrash />
-            </ToolButton>
+            </IconButton>
             <span className="rmt-editor__tools-gap" aria-hidden="true" />
-            <ToolButton label="Undo" shortcut={`${shortcutMod}Z`} disabled={!canUndo} onClick={undo}>
+            <IconButton label="Undo" shortcut={`${shortcutMod}Z`} disabled={!canUndo} onClick={undo}>
               <IconUndo />
-            </ToolButton>
-            <ToolButton label="Redo" shortcut={`${shortcutMod}+Shift+Z`} disabled={!canRedo} onClick={redo}>
+            </IconButton>
+            <IconButton label="Redo" shortcut={`${shortcutMod}+Shift+Z`} disabled={!canRedo} onClick={redo}>
               <IconRedo />
-            </ToolButton>
+            </IconButton>
             {showOpenFile && (
-              <ToolButton label="Open file" disabled={busy} onClick={() => fileRef.current?.click()}>
+              <IconButton label="Open file" disabled={busy} onClick={() => fileRef.current?.click()}>
                 <IconOpen />
-              </ToolButton>
+              </IconButton>
             )}
           </div>
           {showOpenFile && (
@@ -881,14 +883,13 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
               </span>
             )}
             {showDownload && (
-              <button
-                type="button"
-                className="rmt-btn"
-                onClick={() => download()}
+              <IconButton
+                label={downloadLabel}
                 disabled={!lastExport || !clips.length}
+                onClick={() => download()}
               >
-                {downloadLabel}
-              </button>
+                <IconDownload />
+              </IconButton>
             )}
           </div>
         </div>
@@ -967,114 +968,6 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
     );
   },
 );
-
-function ToolButton({
-  label,
-  shortcut,
-  disabled,
-  onClick,
-  children,
-}: {
-  label: string;
-  shortcut?: string;
-  disabled?: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  const title = shortcut ? `${label} (${shortcut})` : label;
-  const keyshortcuts = shortcut
-    ?.replaceAll("⌘+", "Meta+")
-    .replaceAll("⌘", "Meta+")
-    .replaceAll("Ctrl+", "Control+")
-    .replaceAll("Ctrl", "Control");
-  return (
-    <button
-      type="button"
-      className="rmt-btn rmt-btn--icon"
-      onClick={onClick}
-      disabled={disabled}
-      aria-label={label}
-      aria-keyshortcuts={keyshortcuts}
-      title={title}
-    >
-      {children}
-    </button>
-  );
-}
-
-function IconSvg({ children }: { children: React.ReactNode }) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      {children}
-    </svg>
-  );
-}
-
-function IconPlay() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path fill="currentColor" d="M8.4 6.2v11.6l9.4-5.8z" />
-    </svg>
-  );
-}
-
-function IconPause() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <rect fill="currentColor" x="7" y="6" width="3.2" height="12" rx="1" />
-      <rect fill="currentColor" x="13.8" y="6" width="3.2" height="12" rx="1" />
-    </svg>
-  );
-}
-
-function IconSplit() {
-  return (
-    <IconSvg>
-      <path d="M8 9 5 12l3 3" />
-      <path d="m16 9 3 3-3 3" />
-      <path d="M12 4v6" />
-      <path d="M12 14v6" />
-    </IconSvg>
-  );
-}
-
-function IconTrash() {
-  return (
-    <IconSvg>
-      <path d="M5 7h14" />
-      <path d="M10 7V5h4v2" />
-      <path d="M8 7v12h8V7" />
-      <path d="M10 11v5" />
-      <path d="M14 11v5" />
-    </IconSvg>
-  );
-}
-
-function IconUndo() {
-  return (
-    <IconSvg>
-      <path d="M3 9h10a5 5 0 1 1 0 10H9" />
-      <path d="M7 5 3 9l4 4" />
-    </IconSvg>
-  );
-}
-
-function IconRedo() {
-  return (
-    <IconSvg>
-      <path d="M21 9H11a5 5 0 1 0 0 10h4" />
-      <path d="m17 5 4 4-4 4" />
-    </IconSvg>
-  );
-}
-
-function IconOpen() {
-  return (
-    <IconSvg>
-      <path d="M3 8.5A1.5 1.5 0 0 1 4.5 7h4.2l1.8 2H19.5A1.5 1.5 0 0 1 21 10.5v7A1.5 1.5 0 0 1 19.5 19h-15A1.5 1.5 0 0 1 3 17.5z" />
-    </IconSvg>
-  );
-}
 
 const blobIds = new WeakMap<Blob, string>();
 

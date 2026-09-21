@@ -500,6 +500,12 @@
   height: 18px;
 }
 
+.rmt-btn--icon[aria-pressed="true"] {
+  background: var(--rmt-accent-soft);
+  border-color: var(--rmt-accent);
+  color: var(--rmt-fg);
+}
+
 .rmt-timeline {
   display: grid;
   gap: 8px;
