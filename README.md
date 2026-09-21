@@ -5,6 +5,7 @@ In-browser React components for recording and editing media. Nothing is uploaded
 - **`VideoRecorder`** — camera, screen, or camera-on-screen composition, with optional microphone and system audio. Pause, resume, and change sources while a take is running.
 - **`AudioRecorder`** — microphone only. Pause, resume, and get an audio file (`webm` / `m4a`).
 - **`VideoEditor`** — trim, split, reorder, preview, and export a new video file on the client.
+- **`AudioEditor`** — the same timeline for audio files: gain, mute, fades, normalize, and export an audio `Blob`.
 
 React 18+ is a peer dependency. Recording uses the browser capture APIs. Editing uses [Mediabunny](https://mediabunny.dev) (WebCodecs) for demux, encode, and mux. There is no backend and no `ffmpeg.wasm`.
 
@@ -15,6 +16,7 @@ React 18+ is a peer dependency. Recording uses the browser capture APIs. Editing
 - [VideoRecorder](#videorecorder)
 - [AudioRecorder](#audiorecorder)
 - [VideoEditor](#videoeditor)
+- [AudioEditor](#audioeditor)
 - [Theming](#theming)
 - [Helpers and types](#helpers-and-types)
 - [Browser support](#browser-support)
@@ -31,7 +33,7 @@ npm install @anthonyrivas/react-media-tools
 Import the stylesheet once at the app root (or next to the components). Styles are CSS variables and classes (`rmt-*`); there is no CSS-in-JS and no Tailwind.
 
 ```tsx
-import { VideoRecorder, AudioRecorder, VideoEditor } from "@anthonyrivas/react-media-tools";
+import { VideoRecorder, AudioRecorder, VideoEditor, AudioEditor } from "@anthonyrivas/react-media-tools";
 import "@anthonyrivas/react-media-tools/styles.css";
 ```
 
@@ -165,7 +167,7 @@ recorderRef.current?.setOverlay({ x: 0.7, y: 0.65, width: 0.22 });
 - Output is an audio file: WebM/Opus in Chromium and Firefox, MP4/AAC (`.m4a`) in Safari when that encoder exists.
 - The stage shows a live level meter while recording. Built-in Download is off by default; use `result.blob` or `download()` on the handle.
 
-This component does not ingest into `VideoEditor`. Use it when you want an audio file, not a video timeline.
+This component does not ingest into `VideoEditor`. Pass the result to `AudioEditor.addSource` (or drop the file on `AudioEditor`) when you want a timeline.
 
 ### Props
 
@@ -256,7 +258,7 @@ Keyboard shortcuts apply only after the editor was last clicked, or while focus 
 
 `EditorInput`: `{ file: Blob; id?: string; name?: string; durationMs?: number; width?: number; height?: number }`.
 
-`EditorClip`: `{ id, sourceId, inMs, outMs }` — half-open range on the source.
+`EditorClip`: `{ id, sourceId, inMs, outMs, volume?, muted?, fadeInMs?, fadeOutMs? }` — half-open range on the source. Audio fields are optional; omitted volume is unity. `VideoEditor` ignores them until a later release.
 
 ### Handle
 
@@ -283,9 +285,71 @@ editorRef.current?.download();
 
 `ExportResult` has the same shape as `RecordingResult`: `{ blob, mimeType, filename, durationMs, width, height }`.
 
+## AudioEditor
+
+```tsx
+<AudioEditor
+  sources={[{ file: recordingBlob, name: "Take 1", durationMs }]}
+  onExport={(result) => {
+    // result.blob is the edited audio file
+  }}
+/>
+```
+
+Ingest from `AudioRecorder` with `addSource`, drop an audio file, or use Open file. The `sources` prop follows the same identity rules as `VideoEditor`.
+
+### Behavior
+
+- Timeline, trim, split, reorder, undo/redo, and zoom match `VideoEditor`. Drag the inner handles on a clip to set linear fade in / fade out (each fade is capped at half the clip).
+- The stage is a waveform of the clip under the playhead, not a video well. Hover (or focus) for play/pause. Preview applies the selected clip’s gain, mute, and fades through the Web Audio API.
+- Selected-clip mixer: **Mute** (M), **Gain** (0–200%), and **Normalize** (one-shot; sets gain so the clip peaks near −1 dBFS, up to 200%).
+- Export encodes audio only (M4A when WebCodecs allows AAC, otherwise WebM) and calls `onExport`. `ExportResult.width` / `height` are `0`.
+
+Keyboard shortcuts match `VideoEditor`, plus **M** to mute or unmute the selected clip.
+
+### Props
+
+| Prop | Type | Default | Description |
+| --- | --- | --- | --- |
+| `className` | `string` | | Extra class on the root (`.rmt-editor.rmt-editor--audio`). |
+| `style` | `CSSProperties` | | Inline style on the root. |
+| `sources` | `EditorInput[]` | | Initial (and later) files to ingest. |
+| `showOpenFile` | `boolean` | `false` | Shows an Open file control. |
+| `showDownload` | `boolean` | `false` | Shows Download after a successful export. |
+| `exportLabel` | `string` | `"Export"` | Text on the encode button. While encoding, a percent is appended. |
+| `downloadLabel` | `string` | `"Download"` | Accessible name for the optional Download icon. |
+| `onExport` | `(result: ExportResult) => void` | | Fired with the encoded file. |
+| `onChange` | `(clips: EditorClip[]) => void` | | Timeline after trim, split, fade, gain, mute, reorder, delete, undo. |
+| `onError` | `(error: Error) => void` | | Unreadable files, export failures. |
+
+### Handle
+
+```tsx
+const editorRef = useRef<AudioEditorHandle>(null);
+
+await editorRef.current?.addSource(blob, "Take 1");
+editorRef.current?.split();
+editorRef.current?.deleteSelected();
+editorRef.current?.undo();
+editorRef.current?.redo();
+await editorRef.current?.normalizeSelected();
+const exported = await editorRef.current?.exportAudio();
+editorRef.current?.download();
+```
+
+| Method | Description |
+| --- | --- |
+| `addSource(input, name?)` | `EditorInput` or a `Blob`. Probes the file if duration is omitted. |
+| `split()` | Cut the selected (or playhead) clip in two. Fades stay on the outer edges. |
+| `deleteSelected()` | Remove the selected clip. |
+| `undo()` / `redo()` | Timeline history (trims, fades, and gain drags coalesce while you drag). |
+| `normalizeSelected()` | Set gain from the clip’s sample peak. Unmutes. |
+| `exportAudio()` | Encode and return `ExportResult`, or `null` if there is nothing to export. |
+| `download(filename?)` | Save the last export. |
+
 ## Theming
 
-Both video and audio recorders, and the editor, default to **dark**. Set `data-theme="light"` or `data-theme="dark"` on **any ancestor** (typically `<html>` or a layout wrapper). The nearest themed ancestor wins. With no attribute, the UI stays dark.
+Both video and audio recorders, and both editors, default to **dark**. Set `data-theme="light"` or `data-theme="dark"` on **any ancestor** (typically `<html>` or a layout wrapper). The nearest themed ancestor wins. With no attribute, the UI stays dark.
 
 ```html
 <html data-theme="light">
@@ -297,7 +361,7 @@ Both video and audio recorders, and the editor, default to **dark**. Set `data-t
 </div>
 ```
 
-There is no `theme` prop. Do not put `data-theme` on `<VideoEditor />` / `<VideoRecorder />` / `<AudioRecorder />` itself — those props are not forwarded to the DOM.
+There is no `theme` prop. Do not put `data-theme` on `<VideoEditor />` / `<AudioEditor />` / `<VideoRecorder />` / `<AudioRecorder />` itself — those props are not forwarded to the DOM.
 
 Colors, radii, and type live on CSS variables. Override them on `.rmt-recorder` / `.rmt-editor` (or a parent that the components inherit from). The video well (`--rmt-stage-bg`) stays dark in both palettes so overlays stay readable.
 
@@ -323,7 +387,7 @@ These are also exported from the package root:
 | `pickAudioMimeType()` | Best `MediaRecorder` MIME for an **audio** take (`audio/webm` or `audio/mp4`). |
 | `extensionForMime(mime)` | `"webm"`, `"mp4"`, `"m4a"`, `"ogg"`, or `"mp3"`. |
 
-Useful types: `RecordingResult`, `AudioRecordingResult`, `ExportResult`, `EditorInput`, `EditorClip`, `CameraOverlay`, `SourceName`, `RecorderStatus`, `BrowserCapabilities`, `VideoRecorderHandle`, `VideoRecorderProps`, `AudioRecorderHandle`, `AudioRecorderProps`, `VideoEditorHandle`, `VideoEditorProps`.
+Useful types: `RecordingResult`, `AudioRecordingResult`, `ExportResult`, `EditorInput`, `EditorClip`, `CameraOverlay`, `SourceName`, `RecorderStatus`, `BrowserCapabilities`, `VideoRecorderHandle`, `VideoRecorderProps`, `AudioRecorderHandle`, `AudioRecorderProps`, `VideoEditorHandle`, `VideoEditorProps`, `AudioEditorHandle`, `AudioEditorProps`.
 
 ## Browser support
 
@@ -336,7 +400,7 @@ Useful types: `RecordingResult`, `AudioRecordingResult`, `ExportResult`, `Editor
 | Record audio | WebM (Opus) | WebM (Opus) | M4A when the encoder exists | Limited |
 | Edit / export | WebCodecs | WebCodecs | Safari 16.4+ | Safari 16.4+ |
 
-The recorder degrades in the UI when a mode is missing. The editor needs WebCodecs for export; ingest uses Mediabunny plus an `<video>` fallback when a container is unfamiliar.
+The recorder degrades in the UI when a mode is missing. Editors need WebCodecs for export; ingest uses Mediabunny plus an `<video>` / `<audio>` fallback when a container is unfamiliar.
 
 ## SSR
 

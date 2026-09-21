@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `AudioEditor` for standalone audio timelines: ingest `AudioRecorder` blobs and audio files, trim/split/reorder, gain, mute, fade in/out (drag on the clip waveform), normalize, and export an audio `Blob` (M4A or WebM).
+- Clip fields `volume`, `muted`, `fadeInMs`, and `fadeOutMs` on `EditorClip` (optional; `VideoEditor` still ignores them).
+
 ## [0.2.0] - 2026-09-21
 
 Adds an audio-only recorder and aligns compact toolbar controls across the package.
