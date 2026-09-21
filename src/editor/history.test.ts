@@ -20,10 +20,13 @@ describe("history", () => {
     expect(copy.selectedId).toBe("a");
   });
 
-  it("compares clips by id, source, and in/out", () => {
+  it("compares clips by id, source, in/out, and audio fields", () => {
     expect(sameClips([clip("a")], [clip("a")])).toBe(true);
     expect(sameClips([clip("a")], [clip("a", 0, 900)])).toBe(false);
     expect(sameClips([clip("a")], [clip("a"), clip("b")])).toBe(false);
+    expect(sameClips([{ ...clip("a"), volume: 0.5 }], [clip("a")])).toBe(false);
+    expect(sameClips([{ ...clip("a"), muted: true }], [clip("a")])).toBe(false);
+    expect(sameClips([{ ...clip("a"), fadeInMs: 40 }], [clip("a")])).toBe(false);
   });
 
   it("undoes and redoes, clearing redo on a new push", () => {

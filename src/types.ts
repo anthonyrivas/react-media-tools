@@ -53,6 +53,11 @@ export type EditorClip = {
   sourceId: string;
   inMs: number;
   outMs: number;
+  /** Linear gain. `1` is unity. Omitted means unity. */
+  volume?: number;
+  muted?: boolean;
+  fadeInMs?: number;
+  fadeOutMs?: number;
 };
 
 export type ExportResult = {

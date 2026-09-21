@@ -23,7 +23,7 @@ Set `data-theme="light"` or `data-theme="dark"` on an **ancestor** of the compon
 </div>
 ```
 
-`<VideoRecorder />`, `<AudioRecorder />`, and `<VideoEditor />` do not forward a `data-theme` prop to the DOM. Wrap them, or set the attribute on a parent you already control.
+`<VideoRecorder />`, `<AudioRecorder />`, `<VideoEditor />`, and `<AudioEditor />` do not forward a `data-theme` prop to the DOM. Wrap them, or set the attribute on a parent you already control.
 
 With no `data-theme`, the components keep their built-in dark tokens.
 
@@ -96,4 +96,4 @@ These are set on `.rmt-recorder` / `.rmt-editor` and do not change with `data-th
 | Class | Component |
 | --- | --- |
 | `.rmt-recorder` | `VideoRecorder` |
-| `.rmt-editor` | `VideoEditor` |
+| `.rmt-editor` | `VideoEditor` / `AudioEditor` |

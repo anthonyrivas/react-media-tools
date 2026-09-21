@@ -25,7 +25,11 @@ export function sameClips(a: EditorClip[], b: EditorClip[]): boolean {
       clip.id === other.id &&
       clip.sourceId === other.sourceId &&
       clip.inMs === other.inMs &&
-      clip.outMs === other.outMs
+      clip.outMs === other.outMs &&
+      (clip.volume ?? 1) === (other.volume ?? 1) &&
+      Boolean(clip.muted) === Boolean(other.muted) &&
+      (clip.fadeInMs ?? 0) === (other.fadeInMs ?? 0) &&
+      (clip.fadeOutMs ?? 0) === (other.fadeOutMs ?? 0)
     );
   });
 }

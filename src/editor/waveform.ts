@@ -92,10 +92,11 @@ export function paintWaveform(
   const gap = Math.max(1, Math.round(dpr * 0.5));
   const host = canvas.closest(".rmt-clip");
   const styles = getComputedStyle(host ?? canvas);
-  const fill =
-    styles.getPropertyValue("--rmt-fg").trim() ||
-    styles.color ||
-    "#f3f1eb";
+  // Clips sit on the editor chrome (`--rmt-fg`). The preview stage stays dark in
+  // both themes, so it must use `--rmt-on-stage` or it vanishes in light mode.
+  const fill = host
+    ? styles.getPropertyValue("--rmt-fg").trim() || styles.color || "#f3f1eb"
+    : styles.getPropertyValue("--rmt-on-stage").trim() || styles.color || "#f3f1eb";
   const tipAlpha = parseAlpha(styles.getPropertyValue("--rmt-wave-tip-alpha"), 0.18);
   const centerAlpha = parseAlpha(styles.getPropertyValue("--rmt-wave-center-alpha"), 0.36);
 

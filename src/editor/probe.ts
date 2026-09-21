@@ -20,19 +20,19 @@ export type ProbeHints = {
 
 export async function probeMedia(file: Blob, hints?: ProbeHints): Promise<ProbedMedia> {
   const fromDecoder = await probeWithDecoder(file);
-  const fromElement =
-    !fromDecoder || fromDecoder.durationMs <= 0 ? await probeWithElement(file) : null;
+  const needElement = !positive(hints?.durationMs) && (!fromDecoder || fromDecoder.durationMs <= 0);
+  const fromElement = needElement ? await probeWithElement(file) : null;
 
   const durationMs =
     positive(hints?.durationMs) ??
     positive(fromDecoder?.durationMs) ??
     positive(fromElement?.durationMs) ??
     0;
-  const width = hints?.width && hints.width > 0 ? hints.width : fromDecoder?.width || fromElement?.width || 1280;
-  const height = hints?.height && hints.height > 0 ? hints.height : fromDecoder?.height || fromElement?.height || 720;
+  const width = hints?.width && hints.width > 0 ? hints.width : fromDecoder?.width || fromElement?.width || 0;
+  const height = hints?.height && hints.height > 0 ? hints.height : fromDecoder?.height || fromElement?.height || 0;
 
   if (durationMs <= 0) {
-    throw new Error("Could not read this video. Try another file, or record again.");
+    throw new Error("Could not read this file. Try another file, or record again.");
   }
 
   return {
@@ -54,8 +54,8 @@ async function probeWithDecoder(file: Blob): Promise<ProbedMedia | null> {
     const audio = await input.getPrimaryAudioTrack();
     return {
       durationMs: Math.max(0, duration * 1000),
-      width: video ? await video.getDisplayWidth() : 1280,
-      height: video ? await video.getDisplayHeight() : 720,
+      width: video ? await video.getDisplayWidth() : 0,
+      height: video ? await video.getDisplayHeight() : 0,
       hasAudio: Boolean(audio),
     };
   } catch {
@@ -65,24 +65,58 @@ async function probeWithDecoder(file: Blob): Promise<ProbedMedia | null> {
   }
 }
 
+function isAudioBlob(file: Blob): boolean {
+  const type = file.type.toLowerCase();
+  if (type.startsWith("audio/")) return true;
+  if (type.startsWith("video/")) return false;
+  const name = "name" in file ? String((file as File).name) : "";
+  return /\.(m4a|mp3|wav|ogg|oga|aac|flac|weba)$/i.test(name);
+}
+
 async function probeWithElement(file: Blob): Promise<ProbedMedia | null> {
+  if (isAudioBlob(file)) return probeWithAudioElement(file);
+
   const session = openVideoBlob(file);
   try {
     await waitForVideo(session.video, "loadeddata", 8000);
-    const durationMs = videoDurationMs(session.video);
+    const durationMs = mediaDurationMs(session.video);
     const width = session.video.videoWidth || 0;
     const height = session.video.videoHeight || 0;
     if (!width && durationMs <= 0) return null;
     return {
       durationMs,
-      width: width || 1280,
-      height: height || 720,
+      width,
+      height,
       hasAudio: false,
     };
   } catch {
     return null;
   } finally {
     session.dispose();
+  }
+}
+
+async function probeWithAudioElement(file: Blob): Promise<ProbedMedia | null> {
+  const url = URL.createObjectURL(file);
+  const audio = document.createElement("audio");
+  audio.preload = "auto";
+  audio.src = url;
+  try {
+    await waitForVideo(audio, "loadedmetadata", 4000);
+    const durationMs = mediaDurationMs(audio);
+    if (durationMs <= 0) return null;
+    return {
+      durationMs,
+      width: 0,
+      height: 0,
+      hasAudio: true,
+    };
+  } catch {
+    return null;
+  } finally {
+    audio.removeAttribute("src");
+    audio.load();
+    URL.revokeObjectURL(url);
   }
 }
 
@@ -198,16 +232,16 @@ function openVideoBlob(file: Blob): { video: HTMLVideoElement; dispose: () => vo
   };
 }
 
-function videoDurationMs(video: HTMLVideoElement): number {
-  if (Number.isFinite(video.duration) && video.duration > 0) return video.duration * 1000;
-  if (video.seekable.length > 0) {
-    const end = video.seekable.end(video.seekable.length - 1);
+function mediaDurationMs(media: HTMLMediaElement): number {
+  if (Number.isFinite(media.duration) && media.duration > 0) return media.duration * 1000;
+  if (media.seekable.length > 0) {
+    const end = media.seekable.end(media.seekable.length - 1);
     if (Number.isFinite(end) && end > 0) return end * 1000;
   }
   return 0;
 }
 
-function waitForVideo(video: HTMLVideoElement, event: string, timeoutMs: number): Promise<void> {
+function waitForVideo(video: HTMLMediaElement, event: string, timeoutMs: number): Promise<void> {
   return new Promise((resolve, reject) => {
     const timer = window.setTimeout(() => {
       cleanup();

@@ -13,6 +13,7 @@ import { IconMinus, IconPlus } from "../icons";
 import type { EditorClip } from "../types";
 import { formatClock, formatPrecise } from "../utils";
 import { paintWaveform, type WaveformPeaks } from "./waveform";
+import { clampFades } from "./audioGain";
 import {
   MAX_ZOOM,
   MIN_CLIP_MS,
@@ -47,21 +48,27 @@ type TimelineProps = {
   thumbs?: Record<string, string>;
   selectedId: string | null;
   playheadMs: number;
+  emptyHint?: string;
+  showFades?: boolean;
   onSelect: (id: string) => void;
   onSeek: (ms: number) => void;
   onScrub: (ms: number) => void;
   onTrim: (id: string, inMs: number, outMs: number, edge: "in" | "out") => void;
   onTrimEnd: () => void;
+  onFade?: (id: string, fadeInMs: number, fadeOutMs: number) => void;
+  onFadeEnd?: () => void;
   onReorder: (from: number, to: number) => void;
 };
 
 type DragSession = {
-  kind: "move" | "in" | "out" | "playhead";
+  kind: "move" | "in" | "out" | "playhead" | "fadeIn" | "fadeOut";
   id: string;
   index: number;
   startX: number;
   originIn: number;
   originOut: number;
+  originFadeIn: number;
+  originFadeOut: number;
   duration: number;
   width: number;
   moved: boolean;
@@ -84,6 +91,13 @@ type TrimTip = {
   y: number;
 };
 
+type FadeTip = {
+  edge: "in" | "out";
+  ms: number;
+  x: number;
+  y: number;
+};
+
 type ZoomAnchor = {
   ms: number;
   viewOffset: number;
@@ -96,11 +110,15 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
     thumbs,
     selectedId,
     playheadMs,
+    emptyHint = "Drop a video, send a recording, or open a file.",
+    showFades = false,
     onSelect,
     onSeek,
     onScrub,
     onTrim,
     onTrimEnd,
+    onFade,
+    onFadeEnd,
     onReorder,
   },
   ref,
@@ -113,6 +131,8 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
   const sourcesRef = useRef(sources);
   const onTrimRef = useRef(onTrim);
   const onTrimEndRef = useRef(onTrimEnd);
+  const onFadeRef = useRef(onFade);
+  const onFadeEndRef = useRef(onFadeEnd);
   const onReorderRef = useRef(onReorder);
   const onScrubRef = useRef(onScrub);
   const onSeekRef = useRef(onSeek);
@@ -127,15 +147,19 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
   const [holdLayout, setHoldLayout] = useState<HoldLayout | null>(null);
   const holdLayoutRef = useRef<HoldLayout | null>(null);
   const setTrimTipRef = useRef<(tip: TrimTip | null) => void>(() => undefined);
+  const setFadeTipRef = useRef<(tip: FadeTip | null) => void>(() => undefined);
   const [playheadLeft, setPlayheadLeft] = useState(0);
   const [zoom, setZoom] = useState(1);
   const [viewWidth, setViewWidth] = useState(0);
   const [trimTip, setTrimTip] = useState<TrimTip | null>(null);
+  const [fadeTip, setFadeTip] = useState<FadeTip | null>(null);
 
   clipsRef.current = clips;
   sourcesRef.current = sources;
   onTrimRef.current = onTrim;
   onTrimEndRef.current = onTrimEnd;
+  onFadeRef.current = onFade;
+  onFadeEndRef.current = onFadeEnd;
   onReorderRef.current = onReorder;
   onScrubRef.current = onScrub;
   onSeekRef.current = onSeek;
@@ -143,6 +167,7 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
   playheadMsRef.current = playheadMs;
   holdLayoutRef.current = holdLayout;
   setTrimTipRef.current = setTrimTip;
+  setFadeTipRef.current = setFadeTip;
 
   const total = useMemo(
     () => clips.reduce((sum, clip) => sum + Math.max(0, clip.outMs - clip.inMs), 0),
@@ -320,6 +345,27 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
 
       const ppsNow = session.duration > 0 ? session.width / session.duration : 0;
       const deltaMs = ppsNow > 0 ? dx / ppsNow : 0;
+
+      if (session.kind === "fadeIn" || session.kind === "fadeOut") {
+        const maxFade = session.duration / 2;
+        const nextFadeIn =
+          session.kind === "fadeIn"
+            ? clamp(session.originFadeIn + deltaMs, 0, maxFade)
+            : session.originFadeIn;
+        const nextFadeOut =
+          session.kind === "fadeOut"
+            ? clamp(session.originFadeOut - deltaMs, 0, maxFade)
+            : session.originFadeOut;
+        onFadeRef.current?.(session.id, nextFadeIn, nextFadeOut);
+        setFadeTipRef.current({
+          edge: session.kind === "fadeIn" ? "in" : "out",
+          ms: session.kind === "fadeIn" ? nextFadeIn : nextFadeOut,
+          x: event.clientX,
+          y: event.clientY,
+        });
+        return;
+      }
+
       const threshold = snapThresholdMs(ppsNow);
       const clip = clipsRef.current.find((item) => item.id === session.id);
       const source = clip ? sourcesRef.current[clip.sourceId] : undefined;
@@ -394,6 +440,10 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
         setTrimTip(null);
         onTrimEndRef.current();
       }
+      if (session?.kind === "fadeIn" || session?.kind === "fadeOut") {
+        setFadeTip(null);
+        onFadeEndRef.current?.();
+      }
       if (session?.kind === "playhead") {
         const ms = snappedPlayhead(trackRef.current, clipsRef.current, event.clientX);
         if (ms != null) onSeekRef.current(ms);
@@ -428,6 +478,8 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
       startX: event.clientX,
       originIn: 0,
       originOut: 0,
+      originFadeIn: 0,
+      originFadeOut: 0,
       duration: total,
       width: trackRef.current?.getBoundingClientRect().width ?? 1,
       moved: false,
@@ -444,7 +496,7 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
       <div className="rmt-timeline__bar">
         <div className="rmt-timeline__hint">
           {total <= 0
-            ? "Drop a video, send a recording, or open a file."
+            ? emptyHint
             : `${Math.max(1, Math.round(total / 1000))}s · ←/→ scrub · pinch or ${modKey()}+scroll to zoom`}
         </div>
         <div className="rmt-timeline__zoom" role="group" aria-label="Timeline zoom">
@@ -508,6 +560,9 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
               const locked = holdLayout != null;
               const trimming = locked && drag.current?.id === clip.id;
               const width = holdLayout?.widths[clip.id] ?? Math.max(36, duration * pps);
+              const fades = clampFades(clip);
+              const fadeInPct = (fades.fadeInMs / duration) * 100;
+              const fadeOutPct = (fades.fadeOutMs / duration) * 100;
               return (
                 <div
                   key={clip.id}
@@ -519,6 +574,7 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
                     selectedId === clip.id ? "is-selected" : "",
                     dropIndex === index ? "is-drop-target" : "",
                     trimming ? "is-trimming" : "",
+                    clip.muted ? "is-muted" : "",
                   ]
                     .filter(Boolean)
                     .join(" ")}
@@ -530,7 +586,9 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
                     minWidth: 36,
                   }}
                   onPointerDown={(event) => {
-                    if ((event.target as HTMLElement).closest(".rmt-clip__trim")) return;
+                    if ((event.target as HTMLElement).closest(".rmt-clip__trim, .rmt-clip__fade-handle")) {
+                      return;
+                    }
                     event.stopPropagation();
                     onSelect(clip.id);
                     drag.current = {
@@ -540,6 +598,8 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
                       startX: event.clientX,
                       originIn: clip.inMs,
                       originOut: clip.outMs,
+                      originFadeIn: fades.fadeInMs,
+                      originFadeOut: fades.fadeOutMs,
                       duration,
                       width: event.currentTarget.getBoundingClientRect().width,
                       moved: false,
@@ -565,6 +625,8 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
                         startX: event.clientX,
                         originIn: clip.inMs,
                         originOut: clip.outMs,
+                        originFadeIn: fades.fadeInMs,
+                        originFadeOut: fades.fadeOutMs,
                         duration,
                         width: hostWidth,
                         moved: false,
@@ -592,6 +654,90 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
                       {formatPrecise(clip.inMs)}–{formatPrecise(clip.outMs)}
                     </span>
                   </div>
+                  {showFades && onFade && (
+                    <>
+                      {fades.fadeInMs > 0 && (
+                        <div
+                          className="rmt-clip__fade rmt-clip__fade--in"
+                          style={{ width: `${fadeInPct}%` }}
+                          aria-hidden="true"
+                        />
+                      )}
+                      {fades.fadeOutMs > 0 && (
+                        <div
+                          className="rmt-clip__fade rmt-clip__fade--out"
+                          style={{ width: `${fadeOutPct}%` }}
+                          aria-hidden="true"
+                        />
+                      )}
+                      <button
+                        type="button"
+                        className="rmt-clip__fade-handle rmt-clip__fade-handle--in"
+                        tabIndex={-1}
+                        aria-label="Fade in"
+                        style={{ left: `max(28px, ${fadeInPct}%)` }}
+                        onPointerDown={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          onSelect(clip.id);
+                          const host = event.currentTarget.parentElement;
+                          drag.current = {
+                            kind: "fadeIn",
+                            id: clip.id,
+                            index,
+                            startX: event.clientX,
+                            originIn: clip.inMs,
+                            originOut: clip.outMs,
+                            originFadeIn: fades.fadeInMs,
+                            originFadeOut: fades.fadeOutMs,
+                            duration,
+                            width: host?.getBoundingClientRect().width ?? 1,
+                            moved: false,
+                            snapPlayheadMs: playheadMs,
+                          };
+                          setFadeTip({
+                            edge: "in",
+                            ms: fades.fadeInMs,
+                            x: event.clientX,
+                            y: event.clientY,
+                          });
+                        }}
+                      />
+                      <button
+                        type="button"
+                        className="rmt-clip__fade-handle rmt-clip__fade-handle--out"
+                        tabIndex={-1}
+                        aria-label="Fade out"
+                        style={{ right: `max(28px, ${fadeOutPct}%)` }}
+                        onPointerDown={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          onSelect(clip.id);
+                          const host = event.currentTarget.parentElement;
+                          drag.current = {
+                            kind: "fadeOut",
+                            id: clip.id,
+                            index,
+                            startX: event.clientX,
+                            originIn: clip.inMs,
+                            originOut: clip.outMs,
+                            originFadeIn: fades.fadeInMs,
+                            originFadeOut: fades.fadeOutMs,
+                            duration,
+                            width: host?.getBoundingClientRect().width ?? 1,
+                            moved: false,
+                            snapPlayheadMs: playheadMs,
+                          };
+                          setFadeTip({
+                            edge: "out",
+                            ms: fades.fadeOutMs,
+                            x: event.clientX,
+                            y: event.clientY,
+                          });
+                        }}
+                      />
+                    </>
+                  )}
                   <button
                     type="button"
                     className="rmt-clip__trim rmt-clip__trim--out"
@@ -610,6 +756,8 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
                         startX: event.clientX,
                         originIn: clip.inMs,
                         originOut: clip.outMs,
+                        originFadeIn: fades.fadeInMs,
+                        originFadeOut: fades.fadeOutMs,
                         duration,
                         width: hostWidth,
                         moved: false,
@@ -647,6 +795,7 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
         </div>
       </div>
       {trimTip && <TrimTooltip tip={trimTip} />}
+      {fadeTip && <FadeTooltip tip={fadeTip} />}
     </div>
   );
 });
@@ -700,6 +849,23 @@ function TrimTooltip({ tip }: { tip: TrimTip }) {
     >
       <strong>{formatPrecise(tip.edge === "in" ? tip.inMs : tip.outMs)}</strong>
       <span>{formatLength(Math.max(0, tip.outMs - tip.inMs))}</span>
+    </div>
+  );
+}
+
+function FadeTooltip({ tip }: { tip: FadeTip }) {
+  const below = tip.y < 64;
+  const x = clamp(tip.x, 72, window.innerWidth - 72);
+  const y = clamp(tip.y, 8, window.innerHeight - 8);
+  return (
+    <div
+      className={["rmt-trim-tip", below ? "is-below" : ""].filter(Boolean).join(" ")}
+      style={{ left: x, top: y }}
+      role="status"
+      aria-hidden="true"
+    >
+      <strong>{tip.edge === "in" ? "Fade in" : "Fade out"}</strong>
+      <span>{formatLength(tip.ms)}</span>
     </div>
   );
 }
