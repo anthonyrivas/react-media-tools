@@ -4,7 +4,7 @@
 
 ## Light and dark
 
-The recorder and editor default to the **dark** palette.
+The recorders and editor default to the **dark** palette.
 
 Set `data-theme="light"` or `data-theme="dark"` on an **ancestor** of the component (for example `<html>`, `<body>`, or a layout `div`). Tokens inherit from the nearest element that defines them.
 
@@ -23,7 +23,7 @@ Set `data-theme="light"` or `data-theme="dark"` on an **ancestor** of the compon
 </div>
 ```
 
-`<VideoRecorder />` and `<VideoEditor />` do not forward a `data-theme` prop to the DOM. Wrap them, or set the attribute on a parent you already control.
+`<VideoRecorder />`, `<AudioRecorder />`, and `<VideoEditor />` do not forward a `data-theme` prop to the DOM. Wrap them, or set the attribute on a parent you already control.
 
 With no `data-theme`, the components keep their built-in dark tokens.
 

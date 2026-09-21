@@ -8,6 +8,8 @@ import {
   useRef,
   useState,
 } from "react";
+import { IconButton } from "../IconButton";
+import { IconMinus, IconPlus } from "../icons";
 import type { EditorClip } from "../types";
 import { formatClock, formatPrecise } from "../utils";
 import { paintWaveform, type WaveformPeaks } from "./waveform";
@@ -446,31 +448,27 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
             : `${Math.max(1, Math.round(total / 1000))}s · ←/→ scrub · pinch or ${modKey()}+scroll to zoom`}
         </div>
         <div className="rmt-timeline__zoom" role="group" aria-label="Timeline zoom">
-          <button
-            type="button"
-            className="rmt-btn rmt-btn--icon"
+          <IconButton
+            label="Zoom out"
+            keyshortcuts="Minus"
             disabled={zoom <= MIN_ZOOM || !clips.length}
-            aria-label="Zoom out"
-            aria-keyshortcuts="Minus"
             title="Zoom out (–)"
             onClick={() => applyZoom(1 / 1.25)}
           >
-            −
-          </button>
+            <IconMinus />
+          </IconButton>
           <span className="rmt-timeline__zoom-label" aria-live="polite" aria-atomic="true">
             {formatZoom(zoom)}
           </span>
-          <button
-            type="button"
-            className="rmt-btn rmt-btn--icon"
+          <IconButton
+            label="Zoom in"
+            keyshortcuts="Equal"
             disabled={zoom >= MAX_ZOOM || !clips.length}
-            aria-label="Zoom in"
-            aria-keyshortcuts="Equal"
             title="Zoom in (=)"
             onClick={() => applyZoom(1.25)}
           >
-            +
-          </button>
+            <IconPlus />
+          </IconButton>
           <button
             type="button"
             className="rmt-btn"

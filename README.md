@@ -1,8 +1,9 @@
 # @anthonyrivas/react-media-tools
 
-In-browser React components for recording and editing video. Nothing is uploaded unless you do it yourself — both components produce a `Blob` you can download or send to your own API.
+In-browser React components for recording and editing media. Nothing is uploaded unless you do it yourself — the components produce a `Blob` you can download or send to your own API.
 
 - **`VideoRecorder`** — camera, screen, or camera-on-screen composition, with optional microphone and system audio. Pause, resume, and change sources while a take is running.
+- **`AudioRecorder`** — microphone only. Pause, resume, and get an audio file (`webm` / `m4a`).
 - **`VideoEditor`** — trim, split, reorder, preview, and export a new video file on the client.
 
 React 18+ is a peer dependency. Recording uses the browser capture APIs. Editing uses [Mediabunny](https://mediabunny.dev) (WebCodecs) for demux, encode, and mux. There is no backend and no `ffmpeg.wasm`.
@@ -12,6 +13,7 @@ React 18+ is a peer dependency. Recording uses the browser capture APIs. Editing
 - [Install](#install)
 - [Quick start](#quick-start)
 - [VideoRecorder](#videorecorder)
+- [AudioRecorder](#audiorecorder)
 - [VideoEditor](#videoeditor)
 - [Theming](#theming)
 - [Helpers and types](#helpers-and-types)
@@ -29,7 +31,7 @@ npm install @anthonyrivas/react-media-tools
 Import the stylesheet once at the app root (or next to the components). Styles are CSS variables and classes (`rmt-*`); there is no CSS-in-JS and no Tailwind.
 
 ```tsx
-import { VideoRecorder, VideoEditor } from "@anthonyrivas/react-media-tools";
+import { VideoRecorder, AudioRecorder, VideoEditor } from "@anthonyrivas/react-media-tools";
 import "@anthonyrivas/react-media-tools/styles.css";
 ```
 
@@ -146,6 +148,62 @@ recorderRef.current?.setOverlay({ x: 0.7, y: 0.65, width: 0.22 });
 
 `RecordingResult`: `{ blob, mimeType, filename, durationMs, width, height }`.
 
+## AudioRecorder
+
+```tsx
+<AudioRecorder
+  onRecordingStop={(result) => {
+    // result.blob, mimeType, filename, durationMs
+  }}
+/>
+```
+
+### Behavior
+
+- **Start** asks for the microphone and begins the take immediately. There is no camera or screen source.
+- **Pause** / **Resume** keep the same file. **Stop** finishes the `Blob`, fires `onRecordingStop`, and releases the microphone.
+- Output is an audio file: WebM/Opus in Chromium and Firefox, MP4/AAC (`.m4a`) in Safari when that encoder exists.
+- The stage shows a live level meter while recording. Built-in Download is off by default; use `result.blob` or `download()` on the handle.
+
+This component does not ingest into `VideoEditor`. Use it when you want an audio file, not a video timeline.
+
+### Props
+
+| Prop | Type | Default | Description |
+| --- | --- | --- | --- |
+| `className` | `string` | | Extra class on the root (`.rmt-recorder.rmt-recorder--audio`). |
+| `style` | `CSSProperties` | | Inline style on the root. |
+| `showControls` | `boolean` | `true` | Built-in transport. Set `false` if you drive the handle yourself. |
+| `showDownload` | `boolean` | `false` | Shows Download after a take. |
+| `onRecordingStart` | `() => void` | | Fired when recording actually begins. |
+| `onRecordingStop` | `(result: AudioRecordingResult) => void` | | Fired with the finished audio file. |
+| `onRecordingPause` | `() => void` | | |
+| `onRecordingResume` | `() => void` | | |
+| `onError` | `(error: Error) => void` | | Permission failures, missing APIs, encode errors. |
+
+### Handle
+
+```tsx
+const audioRef = useRef<AudioRecorderHandle>(null);
+
+await audioRef.current?.start();
+audioRef.current?.pause();
+audioRef.current?.resume();
+const result = await audioRef.current?.stop();
+audioRef.current?.download("take.webm");
+audioRef.current?.getLastRecording();
+```
+
+| Method | Description |
+| --- | --- |
+| `start()` | Request the microphone and start recording. |
+| `stop()` | Stop and return the `AudioRecordingResult`, or `null` if nothing was captured. |
+| `pause()` / `resume()` | Pause the encoder without finishing the file. |
+| `download(filename?)` | Save the last take. |
+| `getLastRecording()` | Last `AudioRecordingResult`, or `null`. |
+
+`AudioRecordingResult`: `{ blob, mimeType, filename, durationMs }`.
+
 ## VideoEditor
 
 ```tsx
@@ -191,7 +249,7 @@ Keyboard shortcuts apply only after the editor was last clicked, or while focus 
 | `showOpenFile` | `boolean` | `false` | Shows an Open file control. |
 | `showDownload` | `boolean` | `false` | Shows Download after a successful export. |
 | `exportLabel` | `string` | `"Export"` | Text on the encode button. While encoding, a percent is appended (`Export 40%`). |
-| `downloadLabel` | `string` | `"Download"` | Text on the optional Download control. |
+| `downloadLabel` | `string` | `"Download"` | Accessible name for the optional Download icon. |
 | `onExport` | `(result: ExportResult) => void` | | Fired with the encoded file. |
 | `onChange` | `(clips: EditorClip[]) => void` | | Timeline after trim, split, reorder, delete, undo. |
 | `onError` | `(error: Error) => void` | | Unreadable files, export failures. |
@@ -227,7 +285,7 @@ editorRef.current?.download();
 
 ## Theming
 
-Both components default to **dark**. Set `data-theme="light"` or `data-theme="dark"` on **any ancestor** (typically `<html>` or a layout wrapper). The nearest themed ancestor wins. With no attribute, the UI stays dark.
+Both video and audio recorders, and the editor, default to **dark**. Set `data-theme="light"` or `data-theme="dark"` on **any ancestor** (typically `<html>` or a layout wrapper). The nearest themed ancestor wins. With no attribute, the UI stays dark.
 
 ```html
 <html data-theme="light">
@@ -239,7 +297,7 @@ Both components default to **dark**. Set `data-theme="light"` or `data-theme="da
 </div>
 ```
 
-There is no `theme` prop. Do not put `data-theme` on `<VideoEditor />` / `<VideoRecorder />` itself — those props are not forwarded to the DOM.
+There is no `theme` prop. Do not put `data-theme` on `<VideoEditor />` / `<VideoRecorder />` / `<AudioRecorder />` itself — those props are not forwarded to the DOM.
 
 Colors, radii, and type live on CSS variables. Override them on `.rmt-recorder` / `.rmt-editor` (or a parent that the components inherit from). The video well (`--rmt-stage-bg`) stays dark in both palettes so overlays stay readable.
 
@@ -261,10 +319,11 @@ These are also exported from the package root:
 | Export | Description |
 | --- | --- |
 | `detectCapabilities()` | Feature flags and user-facing `notes` for camera, screen, mic, system audio, and recording. |
-| `pickMimeType({ audio?: boolean })` | Best `MediaRecorder` MIME for this browser. |
-| `extensionForMime(mime)` | `"webm"` or `"mp4"`. |
+| `pickMimeType({ audio?: boolean })` | Best `MediaRecorder` MIME for a **video** take. `audio: false` prefers a video-only type. |
+| `pickAudioMimeType()` | Best `MediaRecorder` MIME for an **audio** take (`audio/webm` or `audio/mp4`). |
+| `extensionForMime(mime)` | `"webm"`, `"mp4"`, `"m4a"`, `"ogg"`, or `"mp3"`. |
 
-Useful types: `RecordingResult`, `ExportResult`, `EditorInput`, `EditorClip`, `CameraOverlay`, `SourceName`, `RecorderStatus`, `BrowserCapabilities`, `VideoRecorderHandle`, `VideoRecorderProps`, `VideoEditorHandle`, `VideoEditorProps`.
+Useful types: `RecordingResult`, `AudioRecordingResult`, `ExportResult`, `EditorInput`, `EditorClip`, `CameraOverlay`, `SourceName`, `RecorderStatus`, `BrowserCapabilities`, `VideoRecorderHandle`, `VideoRecorderProps`, `AudioRecorderHandle`, `AudioRecorderProps`, `VideoEditorHandle`, `VideoEditorProps`.
 
 ## Browser support
 
@@ -273,7 +332,8 @@ Useful types: `RecordingResult`, `ExportResult`, `EditorInput`, `EditorClip`, `C
 | Camera + mic | Yes | Yes | Yes | Yes (Safari) |
 | Screen | Yes | Yes | macOS | No |
 | System audio | Yes, when sharing audio | No | No | No |
-| Record | WebM (VP8/VP9) | WebM | MP4 when the encoder exists | Limited |
+| Record video | WebM (VP8/VP9) | WebM | MP4 when the encoder exists | Limited |
+| Record audio | WebM (Opus) | WebM (Opus) | M4A when the encoder exists | Limited |
 | Edit / export | WebCodecs | WebCodecs | Safari 16.4+ | Safari 16.4+ |
 
 The recorder degrades in the UI when a mode is missing. The editor needs WebCodecs for export; ingest uses Mediabunny plus an `<video>` fallback when a container is unfamiliar.
@@ -289,7 +349,7 @@ npm install
 npm run dev
 ```
 
-The demo at the repo root is a Vite app (`demo/`) with both components and a Dark / Light toggle (`data-theme` on `<html>`). See [docs/development.md](docs/development.md) for the library build and tests.
+The demo at the repo root is a Vite app (`demo/`) with the video recorder, audio recorder, editor, and a Dark / Light toggle (`data-theme` on `<html>`). See [docs/development.md](docs/development.md) for the library build and tests.
 
 ```bash
 npm test

@@ -20,6 +20,22 @@ const VIDEO_ONLY_MIME_CANDIDATES = [
   "video/mp4",
 ];
 
+const AUDIO_MIME_CANDIDATES = [
+  "audio/webm;codecs=opus",
+  "audio/webm",
+  "audio/ogg;codecs=opus",
+  "audio/ogg",
+  "audio/mp4;codecs=mp4a.40.2",
+  "audio/mp4",
+];
+
+const SAFARI_AUDIO_MIME_CANDIDATES = [
+  "audio/mp4;codecs=mp4a.40.2",
+  "audio/mp4",
+  "audio/aac",
+  ...AUDIO_MIME_CANDIDATES,
+];
+
 export function pickMimeType(options?: { audio?: boolean }): string {
   if (typeof MediaRecorder === "undefined") return "";
   const videoOnly = options?.audio === false;
@@ -44,8 +60,20 @@ export function pickMimeType(options?: { audio?: boolean }): string {
   return list.find((type) => MediaRecorder.isTypeSupported(type)) ?? "";
 }
 
+export function pickAudioMimeType(): string {
+  if (typeof MediaRecorder === "undefined") return "";
+  const list = isSafariLike() ? SAFARI_AUDIO_MIME_CANDIDATES : AUDIO_MIME_CANDIDATES;
+  return list.find((type) => MediaRecorder.isTypeSupported(type)) ?? "";
+}
+
 export function extensionForMime(mime: string): string {
-  if (mime.includes("mp4")) return "mp4";
+  const type = mime.toLowerCase();
+  if (type.includes("ogg")) return "ogg";
+  if (type.includes("mpeg") || type.includes("mp3")) return "mp3";
+  if (type.startsWith("audio/") && (type.includes("mp4") || type.includes("m4a") || type.includes("aac"))) {
+    return "m4a";
+  }
+  if (type.includes("mp4")) return "mp4";
   return "webm";
 }
 

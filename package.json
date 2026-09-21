@@ -1,7 +1,7 @@
 {
   "name": "@anthonyrivas/react-media-tools",
-  "version": "0.1.0",
-  "description": "In-browser React video recorder and editor components.",
+  "version": "0.2.0",
+  "description": "In-browser React video recorder, audio recorder, and editor components.",
   "license": "MIT",
   "author": "Anthony Rivas",
   "repository": {
@@ -15,6 +15,7 @@
   "keywords": [
     "react",
     "video",
+    "audio",
     "recorder",
     "editor",
     "mediabunny",

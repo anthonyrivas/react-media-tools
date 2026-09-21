@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-21
+
+Adds an audio-only recorder and aligns compact toolbar controls across the package.
+
+### Added
+
+- `AudioRecorder` for microphone takes that produce an audio `Blob` (WebM/Opus, or M4A on Safari). Pause, resume, and `showDownload` match `VideoRecorder`.
+- `AudioRecordingResult`: `{ blob, mimeType, filename, durationMs }`.
+- `pickAudioMimeType()` for audio-only `MediaRecorder` types; `extensionForMime` also maps `m4a` / `ogg` / `mp3`.
+- Shared icon buttons for compact tools (sources, pause/resume, download, editor tools, zoom).
+
+### Changed
+
+- Recorder source toggles, pause/resume, download, and timeline zoom use the same icon buttons as the editor. Start, Stop, Export, and Fit stay labeled text.
+- `downloadLabel` on `VideoEditor` is the accessible name of the Download icon.
+
 ## [0.1.0] - 2026-09-20
 
 Initial public release: in-browser React recorder and editor. Nothing is uploaded; both components produce a `Blob`.
@@ -20,5 +36,6 @@ Initial public release: in-browser React recorder and editor. Nothing is uploade
 - Dark palette by default; `data-theme="light"` or `data-theme="dark"` on an ancestor switches tokens (`rmt-*` CSS variables).
 - Helpers `detectCapabilities`, `pickMimeType`, and `extensionForMime`.
 
-[Unreleased]: https://github.com/anthonyrivas/react-media-tools/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/anthonyrivas/react-media-tools/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/anthonyrivas/react-media-tools/releases/tag/v0.2.0
 [0.1.0]: https://github.com/anthonyrivas/react-media-tools/releases/tag/v0.1.0
