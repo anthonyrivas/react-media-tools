@@ -4,3 +4,4 @@ demo-dist
 .DS_Store
 *.local
 .vite
+*.tgz

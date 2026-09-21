@@ -4,6 +4,13 @@ import path from "node:path";
 
 export default defineConfig({
   plugins: [react()],
+  define: {
+    "process.env.NODE_ENV": JSON.stringify("production"),
+  },
+  esbuild: {
+    jsx: "automatic",
+    jsxDev: false,
+  },
   build: {
     lib: {
       entry: path.resolve(__dirname, "src/index.ts"),
@@ -12,7 +19,13 @@ export default defineConfig({
       formats: ["es"],
     },
     rollupOptions: {
-      external: ["react", "react-dom", "react/jsx-runtime", "mediabunny"],
+      external: [
+        "react",
+        "react-dom",
+        "react/jsx-runtime",
+        "react/jsx-dev-runtime",
+        "mediabunny",
+      ],
       output: {
         assetFileNames: (asset) =>
           asset.name?.endsWith(".css") ? "styles.css" : asset.name ?? "[name][extname]",
