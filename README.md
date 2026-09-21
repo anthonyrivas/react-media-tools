@@ -18,6 +18,7 @@ React 18+ is a peer dependency. Recording uses the browser capture APIs. Editing
 - [Browser support](#browser-support)
 - [SSR](#ssr)
 - [Demo](#demo)
+- [Changelog](#changelog)
 
 ## Install
 
@@ -293,6 +294,10 @@ The demo at the repo root is a Vite app (`demo/`) with both components and a Dar
 ```bash
 npm test
 ```
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for released versions.
 
 ## License
 
