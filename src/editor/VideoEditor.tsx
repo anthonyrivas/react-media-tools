@@ -274,8 +274,8 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
             url,
             name: item.name ?? name ?? `Clip ${Object.keys(sourcesRef.current).length + 1}`,
             durationMs,
-            width: item.width ?? probed.width,
-            height: item.height ?? probed.height,
+            width: item.width || probed.width || 1280,
+            height: item.height || probed.height || 720,
           };
           setSourceMap((current) => ({ ...current, [id]: loaded }));
           appendClip(id, durationMs, item.file);
