@@ -1003,6 +1003,7 @@ export const AudioEditor = forwardRef<AudioEditorHandle, AudioEditorProps>(funct
             step={1}
             value={gainPercent}
             disabled={!selected}
+            aria-label="Gain"
             aria-valuetext={`${gainPercent} percent`}
             onChange={(event) => handleGainInput(Number(event.target.value))}
             onPointerUp={handleGainCommit}
