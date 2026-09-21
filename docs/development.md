@@ -7,12 +7,14 @@ This repository is a Vite library with a demo app at the repo root.
 ```bash
 npm install
 npm run dev          # demo at http://localhost:5173 (or the next free port)
+npm test             # vitest once
+npm run test:watch   # vitest in watch mode
 npm run build        # library into dist/ (JS, d.ts, styles.css)
 npm run build:demo   # static demo build
 npm run preview      # preview the demo build
 ```
 
-`npm run dev` aliases `@anthonyrivas/react-media-tools` to `src/`, so the demo imports match the published package name.
+`npm run dev` aliases `@anthonyrivas/react-media-tools` to `src/`, so the demo imports match the published package name. Tests live next to the source as `*.test.ts` / `*.test.tsx` and run in jsdom; media capture is mocked.
 
 ## Layout
 

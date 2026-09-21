@@ -288,7 +288,11 @@ npm install
 npm run dev
 ```
 
-The demo at the repo root is a Vite app (`demo/`) with both components and a Dark / Light toggle (`data-theme` on `<html>`). See [docs/development.md](docs/development.md) for the library build.
+The demo at the repo root is a Vite app (`demo/`) with both components and a Dark / Light toggle (`data-theme` on `<html>`). See [docs/development.md](docs/development.md) for the library build and tests.
+
+```bash
+npm test
+```
 
 ## License
 

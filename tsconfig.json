@@ -23,5 +23,5 @@
       "@anthonyrivas/react-media-tools": ["./src/index.ts"]
     }
   },
-  "include": ["src", "demo"]
+  "include": ["src", "demo", "vitest.setup.ts"]
 }
