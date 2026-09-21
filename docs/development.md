@@ -20,7 +20,7 @@ npm run preview      # preview the demo build
 
 | Path | Role |
 | --- | --- |
-| `src/` | Library (`VideoRecorder`, `VideoEditor`, styles) |
+| `src/` | Library (`VideoRecorder`, `AudioRecorder`, `VideoEditor`, styles) |
 | `src/index.ts` | Package exports |
 | `src/styles.css` | Component CSS (copied to `dist/styles.css` on build) |
 | `demo/` | Vite playground |

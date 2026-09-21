@@ -1,7 +1,9 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import {
+  AudioRecorder,
   VideoEditor,
   VideoRecorder,
+  type AudioRecordingResult,
   type RecordingResult,
   type VideoEditorHandle,
 } from "@anthonyrivas/react-media-tools";
@@ -13,6 +15,7 @@ export default function App() {
   const takeCount = useRef(0);
   const [theme, setTheme] = useState<Theme>("dark");
   const [message, setMessage] = useState("Record a take, or drop a file on the editor.");
+  const [audioMessage, setAudioMessage] = useState("Microphone only. Stop to get a WebM or M4A file.");
 
   useLayoutEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -67,19 +70,33 @@ export default function App() {
           </div>
         </div>
         <p>
-          Two React components, no server. Record camera, screen, or both; edit the
-          result in the browser; download a video file.
+          Three React components, no server. Record camera, screen, or microphone
+          audio; edit video in the browser; download the file.
         </p>
       </header>
 
       <section className="studio__panel">
         <div className="studio__panel-head">
-          <h2>Recorder</h2>
+          <h2>Video recorder</h2>
           <p>Chrome, Firefox, and Safari. Unavailable capture modes stay off.</p>
         </div>
         <VideoRecorder
           onRecordingStop={(result) => void ingest(result)}
           onError={(error) => setMessage(error.message)}
+        />
+      </section>
+
+      <section className="studio__panel">
+        <div className="studio__panel-head">
+          <h2>Audio recorder</h2>
+          <p>{audioMessage}</p>
+        </div>
+        <AudioRecorder
+          showDownload
+          onRecordingStop={(result: AudioRecordingResult) =>
+            setAudioMessage(`${result.filename} (${Math.round(result.durationMs / 100) / 10}s).`)
+          }
+          onError={(error) => setAudioMessage(error.message)}
         />
       </section>
 
