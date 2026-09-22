@@ -10,9 +10,11 @@ vi.mock("./probe", () => ({
     width: 640,
     height: 360,
     hasAudio: true,
+    hasVideo: true,
   })),
   extractThumbnail: vi.fn(async () => null),
   rasterizeClip: vi.fn(),
+  looksLikeAudioFile: (file: Blob) => file.type.startsWith("audio/"),
 }));
 
 vi.mock("./waveform", () => ({
@@ -29,6 +31,7 @@ vi.mock("./exportAudio", () => ({
   measureClipPeak: (...args: unknown[]) => measureClipPeak(...args),
 }));
 
+import { probeMedia } from "./probe";
 import { VideoEditor } from "./VideoEditor";
 import { NORMALIZE_PEAK } from "./audioGain";
 
@@ -135,5 +138,31 @@ describe("VideoEditor", () => {
       expect(clips[0]?.muted).toBe(false);
       expect(clips[0]?.volume).toBeCloseTo(NORMALIZE_PEAK / 0.5);
     });
+  });
+
+  it("places audio files on the extra audio track", async () => {
+    vi.mocked(probeMedia).mockResolvedValueOnce({
+      durationMs: 1500,
+      width: 0,
+      height: 0,
+      hasAudio: true,
+      hasVideo: false,
+    });
+    const onChange = vi.fn();
+    const ref = createRef<VideoEditorHandle>();
+    render(<VideoEditor ref={ref} onChange={onChange} />);
+
+    await ref.current?.addSource({
+      file: new Blob(["audio"], { type: "audio/webm" }),
+      name: "VO",
+      durationMs: 1500,
+    });
+
+    await waitFor(() => expect(screen.getByText("VO")).toBeInTheDocument());
+    expect(onChange.mock.calls.at(-1)?.[0]?.[0]).toMatchObject({
+      kind: "audio",
+      startMs: 0,
+    });
+    expect(screen.getByRole("group", { name: /VO/ })).toHaveClass("rmt-clip--audio");
   });
 });
