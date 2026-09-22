@@ -1,6 +1,6 @@
 {
   "name": "@anthonyrivas/react-media-tools",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "In-browser React components for recording and editing video and audio.",
   "license": "MIT",
   "author": "Anthony Rivas",

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-21
+
 Puts clip audio controls and a second audio track into `VideoEditor`.
 
 ### Added
@@ -69,7 +71,8 @@ Initial public release: in-browser React recorder and editor. Nothing is uploade
 - Dark palette by default; `data-theme="light"` or `data-theme="dark"` on an ancestor switches tokens (`rmt-*` CSS variables).
 - Helpers `detectCapabilities`, `pickMimeType`, and `extensionForMime`.
 
-[Unreleased]: https://github.com/anthonyrivas/react-media-tools/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/anthonyrivas/react-media-tools/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/anthonyrivas/react-media-tools/releases/tag/v0.4.0
 [0.3.0]: https://github.com/anthonyrivas/react-media-tools/releases/tag/v0.3.0
 [0.2.0]: https://github.com/anthonyrivas/react-media-tools/releases/tag/v0.2.0
 [0.1.0]: https://github.com/anthonyrivas/react-media-tools/releases/tag/v0.1.0
