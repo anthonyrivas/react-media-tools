@@ -4,7 +4,7 @@ In-browser React components for recording and editing media. Nothing is uploaded
 
 - **`VideoRecorder`** — camera, screen, or camera-on-screen composition, with optional microphone and system audio. Pause, resume, and change sources while a take is running.
 - **`AudioRecorder`** — microphone only. Pause, resume, and get an audio file (`webm` / `m4a`).
-- **`VideoEditor`** — trim, split, reorder, preview, and export a new video file on the client.
+- **`VideoEditor`** — trim, split, reorder, mix clip audio, overlay one extra audio track, and export a new video file on the client.
 - **`AudioEditor`** — the same timeline for audio files: gain, mute, fades, normalize, and export an audio `Blob`.
 
 React 18+ is a peer dependency. Recording uses the browser capture APIs. Editing uses [Mediabunny](https://mediabunny.dev) (WebCodecs) for demux, encode, and mux. There is no backend and no `ffmpeg.wasm`.
@@ -167,7 +167,7 @@ recorderRef.current?.setOverlay({ x: 0.7, y: 0.65, width: 0.22 });
 - Output is an audio file: WebM/Opus in Chromium and Firefox, MP4/AAC (`.m4a`) in Safari when that encoder exists.
 - The stage shows a live level meter while recording. Built-in Download is off by default; use `result.blob` or `download()` on the handle.
 
-This component does not ingest into `VideoEditor`. Pass the result to `AudioEditor.addSource` (or drop the file on `AudioEditor`) when you want a timeline.
+This component does not ingest anywhere by itself. Pass the result to `AudioEditor.addSource` or `VideoEditor.addSource` (audio files land on VideoEditor’s extra audio track).
 
 ### Props
 
@@ -217,15 +217,17 @@ audioRef.current?.getLastRecording();
 />
 ```
 
-You can also skip `sources` and call `addSource` on the handle (including from `onRecordingStop`). Dropping a video file onto the editor has the same effect. The `sources` prop is ingested when it changes. Pass a stable `id` or the same `Blob` instance if that array is recreated on render, or you will append duplicate clips.
+You can also skip `sources` and call `addSource` on the handle (including from `onRecordingStop`). Dropping a video or audio file onto the editor has the same effect. Audio files (and audio-only blobs) go on a second timeline track under the picture. The `sources` prop is ingested when it changes. Pass a stable `id` or the same `Blob` instance if that array is recreated on render, or you will append duplicate clips.
 
 ### Behavior
 
-- Timeline clips are the in/out range of a source. Trim either edge; split at the playhead; drag to reorder. Neighbor cuts and the playhead snap magnetically.
-- Preview plays through clips in order. Hover (or focus) the preview for play/pause. Click the ruler or drag the playhead to scrub.
+- Timeline clips are the in/out range of a source. Trim either edge; split at the playhead; drag video clips to reorder. Neighbor cuts and the playhead snap magnetically.
+- Extra audio sits on a second lane. Drag it to slip in time (it is not magnetic). **Unlink audio** (U) mutes a video clip and copies its sound onto that lane so you can make J and L cuts.
+- Preview plays picture in order and mixes extra audio under it, including overlapping clips. Hover (or focus) the preview for play/pause. Click the ruler or drag the playhead to scrub.
+- Selected clips (video or extra audio) have gain, mute, linear fades, and normalize. Export applies the same envelopes and mixes extra audio into the soundtrack.
 - Zoom with `−` / `=` / `0`, the zoom controls, pinch, or ⌘/Ctrl+scroll. Trimming while zoomed keeps the layout still so the handle you grabbed does not jump.
 - Clips with audio get a translucent waveform after ingest (decoded once per source).
-- Export encodes in the browser (MP4 when WebCodecs allows it, otherwise WebM) and calls `onExport`. Progress is shown on the Export button.
+- Export encodes in the browser (MP4 when WebCodecs allows it, otherwise WebM) and calls `onExport`. Progress is shown on the Export button. Export needs at least one video clip.
 
 Keyboard shortcuts apply only after the editor was last clicked, or while focus is inside it, and never while typing in a field.
 
@@ -236,6 +238,8 @@ Keyboard shortcuts apply only after the editor was last clicked, or while focus 
 | Home / End | Jump to start / end |
 | ↑ / ↓ | Select previous / next clip |
 | S | Split at the playhead |
+| M | Mute / unmute the selected clip |
+| U | Unlink the selected video clip’s audio onto the extra track |
 | Delete / Backspace | Remove the selected clip |
 | ⌘/Ctrl+Z | Undo |
 | ⌘/Ctrl+Shift+Z or ⌘/Ctrl+Y | Redo |
@@ -258,7 +262,7 @@ Keyboard shortcuts apply only after the editor was last clicked, or while focus 
 
 `EditorInput`: `{ file: Blob; id?: string; name?: string; durationMs?: number; width?: number; height?: number }`.
 
-`EditorClip`: `{ id, sourceId, inMs, outMs, volume?, muted?, fadeInMs?, fadeOutMs? }` — half-open range on the source. Audio fields are optional; omitted volume is unity. `VideoEditor` ignores them until a later release.
+`EditorClip`: `{ id, sourceId, inMs, outMs, volume?, muted?, fadeInMs?, fadeOutMs?, kind?, startMs?, linkedClipId? }` — half-open range on the source. Omitted `kind` is treated as video (magnetic). `kind: "audio"` clips use `startMs` on the extra track. Audio fields are optional; omitted volume is unity.
 
 ### Handle
 
@@ -270,17 +274,21 @@ editorRef.current?.split();
 editorRef.current?.deleteSelected();
 editorRef.current?.undo();
 editorRef.current?.redo();
+await editorRef.current?.normalizeSelected();
+editorRef.current?.unlinkSelected();
 const exported = await editorRef.current?.exportVideo();
 editorRef.current?.download();
 ```
 
 | Method | Description |
 | --- | --- |
-| `addSource(input, name?)` | `EditorInput` or a `Blob`. Probes the file if duration/size are omitted. |
+| `addSource(input, name?)` | `EditorInput` or a `Blob`. Probes the file if duration/size are omitted. Audio-only files go on the extra track at the playhead. |
 | `split()` | Cut the selected (or playhead) clip in two. |
 | `deleteSelected()` | Remove the selected clip. |
 | `undo()` / `redo()` | Timeline history (trims coalesce while you drag). |
-| `exportVideo()` | Encode and return `ExportResult`, or `null` if there is nothing to export. |
+| `normalizeSelected()` | Set gain from the clip’s sample peak. Unmutes. |
+| `unlinkSelected()` | Mute the selected video clip and copy its sound onto the extra audio track. |
+| `exportVideo()` | Encode and return `ExportResult`, or `null` if there is no picture clip. |
 | `download(filename?)` | Save the last export (runs export first if needed). |
 
 `ExportResult` has the same shape as `RecordingResult`: `{ blob, mimeType, filename, durationMs, width, height }`.
@@ -300,12 +308,12 @@ Ingest from `AudioRecorder` with `addSource`, drop an audio file, or use Open fi
 
 ### Behavior
 
-- Timeline, trim, split, reorder, undo/redo, and zoom match `VideoEditor`. Drag the inner handles on a clip to set linear fade in / fade out (each fade is capped at half the clip).
+- Timeline, trim, split, reorder, undo/redo, and zoom match `VideoEditor`’s picture track (clips stay magnetic; there is no extra audio lane). Drag the inner handles on a clip to set linear fade in / fade out (each fade is capped at half the clip).
 - The stage is a waveform of the clip under the playhead, not a video well. Hover (or focus) for play/pause. Preview applies the selected clip’s gain, mute, and fades through the Web Audio API.
 - Selected-clip mixer: **Mute** (M), **Gain** (0–200%), and **Normalize** (one-shot; sets gain so the clip peaks near −1 dBFS, up to 200%).
 - Export encodes audio only (M4A when WebCodecs allows AAC, otherwise WebM) and calls `onExport`. `ExportResult.width` / `height` are `0`.
 
-Keyboard shortcuts match `VideoEditor`, plus **M** to mute or unmute the selected clip.
+Keyboard shortcuts match `VideoEditor` except **U** (unlink is video-only). **M** mutes the selected clip.
 
 ### Props
 

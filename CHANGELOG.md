@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Puts clip audio controls and a second audio track into `VideoEditor`.
+
+### Added
+
+- Extra audio track on `VideoEditor`: drop or `addSource` an audio file to place it at the playhead. Drag to slip in time. Overlapping extras mix in preview and export.
+- `EditorClip.kind`, `startMs`, and `linkedClipId`. Omitted `kind` stays magnetic (including `AudioEditor`).
+- **Unlink audio** (U) mutes a video clip and copies its sound onto the extra track for J/L cuts.
+- `VideoEditorHandle.unlinkSelected()`.
+
+### Changed
+
+- Video clips already had gain, mute, fades, and normalize; export now mixes those envelopes with extra-track audio.
+- `VideoEditor` Open file / drop accepts audio as well as video. Export still needs at least one picture clip.
+
 ## [0.3.0] - 2026-09-21
 
 Adds a standalone audio editor.
