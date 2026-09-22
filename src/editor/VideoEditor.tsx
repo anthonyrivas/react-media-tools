@@ -25,6 +25,7 @@ import {
   IconSplit,
   IconTrash,
   IconUndo,
+  IconUnlink,
 } from "../icons";
 import { extractPeaks } from "./waveform";
 import {
@@ -61,6 +62,7 @@ export type VideoEditorHandle = {
   exportVideo: () => Promise<ExportResult | null>;
   download: (filename?: string) => void;
   normalizeSelected: () => Promise<void>;
+  unlinkSelected: () => void;
 };
 
 export type VideoEditorProps = {
@@ -795,6 +797,37 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
       patchClip(clip.id, { muted: !clip.muted });
     }, [patchClip, recordHistory]);
 
+    const unlinkSelected = useCallback(() => {
+      const clipsNow = clipsRef.current;
+      const clip = clipsNow.find((item) => item.id === selectedIdRef.current);
+      if (!clip || isAudioClip(clip)) return;
+      if (clipsNow.some((item) => item.linkedClipId === clip.id)) return;
+      recordHistory();
+      const index = clipsNow.findIndex((item) => item.id === clip.id);
+      const audio = withClampedAudio({
+        id: uid("clip"),
+        sourceId: clip.sourceId,
+        inMs: clip.inMs,
+        outMs: clip.outMs,
+        volume: clip.volume,
+        fadeInMs: clip.fadeInMs,
+        fadeOutMs: clip.fadeOutMs,
+        kind: "audio",
+        startMs: clipStartMs(clipsNow, index),
+        linkedClipId: clip.id,
+        muted: false,
+      });
+      const next = clipsNow
+        .map((item) => (item.id === clip.id ? withClampedAudio({ ...item, muted: true }) : item))
+        .concat(audio);
+      clipsRef.current = next;
+      setClips(next);
+      onChange?.(next);
+      setSelectedId(audio.id);
+      applyLiveGain({ ...clip, muted: true }, 0);
+      syncExtraAudio(playheadRef.current, playingRef.current);
+    }, [applyLiveGain, onChange, recordHistory, syncExtraAudio]);
+
     const normalizeSelected = useCallback(async () => {
       const clip = clipsRef.current.find((item) => item.id === selectedIdRef.current);
       const file = clip ? sourcesRef.current[clip.sourceId]?.file : undefined;
@@ -1046,8 +1079,18 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
 
     useImperativeHandle(
       ref,
-      () => ({ addSource, split, deleteSelected, undo, redo, exportVideo, download, normalizeSelected }),
-      [addSource, deleteSelected, download, exportVideo, normalizeSelected, redo, split, undo],
+      () => ({
+        addSource,
+        split,
+        deleteSelected,
+        undo,
+        redo,
+        exportVideo,
+        download,
+        normalizeSelected,
+        unlinkSelected,
+      }),
+      [addSource, deleteSelected, download, exportVideo, normalizeSelected, redo, split, undo, unlinkSelected],
     );
 
     useEffect(() => {
@@ -1131,6 +1174,11 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
           toggleMute();
           return;
         }
+        if (event.key === "u" || event.key === "U") {
+          event.preventDefault();
+          unlinkSelected();
+          return;
+        }
         if (event.key === "Backspace" || event.key === "Delete") {
           if (!selectedIdRef.current) return;
           event.preventDefault();
@@ -1154,12 +1202,14 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
       };
       window.addEventListener("keydown", onKey);
       return () => window.removeEventListener("keydown", onKey);
-    }, [deleteSelected, handleScrub, redo, split, toggleMute, togglePlay, undo]);
+    }, [deleteSelected, handleScrub, redo, split, toggleMute, togglePlay, undo, unlinkSelected]);
 
     const shortcutMod =
       typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘" : "Ctrl";
     const selected = clips.find((clip) => clip.id === selectedId) ?? null;
     const gainPercent = Math.round((selected?.volume ?? 1) * 100);
+    const canUnlink =
+      selected != null && isVideoClip(selected) && !clips.some((item) => item.linkedClipId === selected.id);
 
     return (
       <div
@@ -1252,6 +1302,14 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
             onClick={toggleMute}
           >
             {selected?.muted ? <IconMute /> : <IconSpeaker />}
+          </IconButton>
+          <IconButton
+            label="Unlink audio"
+            shortcut="U"
+            disabled={!canUnlink}
+            onClick={unlinkSelected}
+          >
+            <IconUnlink />
           </IconButton>
           <label className="rmt-editor__gain">
             Gain

@@ -140,6 +140,36 @@ describe("VideoEditor", () => {
     });
   });
 
+  it("unlinks clip audio onto the extra track for J and L cuts", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const ref = createRef<VideoEditorHandle>();
+    render(<VideoEditor ref={ref} onChange={onChange} />);
+
+    await ref.current?.addSource({
+      file: new Blob(["video"]),
+      name: "Take 1",
+      durationMs: 2000,
+    });
+    await waitFor(() => expect(screen.getByText("Take 1")).toBeInTheDocument());
+
+    await user.click(screen.getByRole("button", { name: "Unlink audio" }));
+    await waitFor(() => {
+      const clips = onChange.mock.calls.at(-1)?.[0] as Array<{
+        id: string;
+        kind?: string;
+        muted?: boolean;
+        linkedClipId?: string;
+        startMs?: number;
+      }>;
+      const picture = clips.find((clip) => clip.kind !== "audio");
+      const audio = clips.find((clip) => clip.kind === "audio");
+      expect(picture?.muted).toBe(true);
+      expect(audio).toMatchObject({ kind: "audio", startMs: 0, linkedClipId: picture?.id });
+    });
+    expect(screen.getByRole("button", { name: "Unlink audio" })).toBeDisabled();
+  });
+
   it("places audio files on the extra audio track", async () => {
     vi.mocked(probeMedia).mockResolvedValueOnce({
       durationMs: 1500,

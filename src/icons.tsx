@@ -159,3 +159,13 @@ export function IconMute() {
     </IconSvg>
   );
 }
+
+export function IconUnlink() {
+  return (
+    <IconSvg>
+      <path d="M8.8 15.2 7 17a3.2 3.2 0 0 1-4.5-4.5l2.5-2.5A3.2 3.2 0 0 1 9.2 10" />
+      <path d="M15.2 8.8 17 7a3.2 3.2 0 0 1 4.5 4.5l-2.5 2.5A3.2 3.2 0 0 1 14.8 14" />
+      <path d="m9 15 6-6" />
+    </IconSvg>
+  );
+}
