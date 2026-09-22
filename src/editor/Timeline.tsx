@@ -27,6 +27,11 @@ import {
   locateClip,
   snapThresholdMs,
   snapValue,
+  audioClipStart,
+  audioTrackClips,
+  isAudioClip,
+  timelineDuration,
+  videoTrackClips,
 } from "./timelineMath";
 
 export type TimelineSource = {
@@ -58,10 +63,13 @@ type TimelineProps = {
   onFade?: (id: string, fadeInMs: number, fadeOutMs: number) => void;
   onFadeEnd?: () => void;
   onReorder: (from: number, to: number) => void;
+  showAudioTrack?: boolean;
+  onMoveAudio?: (id: string, startMs: number) => void;
+  onMoveAudioEnd?: () => void;
 };
 
 type DragSession = {
-  kind: "move" | "in" | "out" | "playhead" | "fadeIn" | "fadeOut";
+  kind: "move" | "in" | "out" | "playhead" | "fadeIn" | "fadeOut" | "audioMove";
   id: string;
   index: number;
   startX: number;
@@ -69,6 +77,7 @@ type DragSession = {
   originOut: number;
   originFadeIn: number;
   originFadeOut: number;
+  originStart: number;
   duration: number;
   width: number;
   moved: boolean;
@@ -120,6 +129,9 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
     onFade,
     onFadeEnd,
     onReorder,
+    showAudioTrack = false,
+    onMoveAudio,
+    onMoveAudioEnd,
   },
   ref,
 ) {
@@ -134,6 +146,8 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
   const onFadeRef = useRef(onFade);
   const onFadeEndRef = useRef(onFadeEnd);
   const onReorderRef = useRef(onReorder);
+  const onMoveAudioRef = useRef(onMoveAudio);
+  const onMoveAudioEndRef = useRef(onMoveAudioEnd);
   const onScrubRef = useRef(onScrub);
   const onSeekRef = useRef(onSeek);
   const moveRaf = useRef(0);
@@ -161,6 +175,8 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
   onFadeRef.current = onFade;
   onFadeEndRef.current = onFadeEnd;
   onReorderRef.current = onReorder;
+  onMoveAudioRef.current = onMoveAudio;
+  onMoveAudioEndRef.current = onMoveAudioEnd;
   onScrubRef.current = onScrub;
   onSeekRef.current = onSeek;
   zoomRef.current = zoom;
@@ -169,10 +185,9 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
   setTrimTipRef.current = setTrimTip;
   setFadeTipRef.current = setFadeTip;
 
-  const total = useMemo(
-    () => clips.reduce((sum, clip) => sum + Math.max(0, clip.outMs - clip.inMs), 0),
-    [clips],
-  );
+  const videoClips = useMemo(() => videoTrackClips(clips), [clips]);
+  const extraAudio = useMemo(() => audioTrackClips(clips), [clips]);
+  const total = useMemo(() => timelineDuration(clips), [clips]);
 
   const playhead = useMemo(() => locateClip(clips, playheadMs), [clips, playheadMs]);
 
@@ -198,7 +213,7 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
     const widths: Record<string, number> = {};
     if (track) {
       clipElements(track).forEach((el, i) => {
-        const clip = clipsRef.current[i];
+        const clip = videoTrackClips(clipsRef.current)[i];
         if (clip) widths[clip.id] = el.getBoundingClientRect().width;
       });
     }
@@ -337,7 +352,11 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
       }
 
       if (session.kind === "move") {
-        const nextIndex = indexFromClientX(trackRef.current, event.clientX, clipsRef.current.length);
+        const nextIndex = indexFromClientX(
+          trackRef.current,
+          event.clientX,
+          videoTrackClips(clipsRef.current).length,
+        );
         dropIndexRef.current = nextIndex;
         setDropIndex(nextIndex);
         return;
@@ -345,6 +364,14 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
 
       const ppsNow = session.duration > 0 ? session.width / session.duration : 0;
       const deltaMs = ppsNow > 0 ? dx / ppsNow : 0;
+
+      if (session.kind === "audioMove") {
+        const nextStart = Math.max(0, session.originStart + deltaMs);
+        const threshold = snapThresholdMs(ppsNow);
+        const snapped = snapValue(nextStart, cutTimes(clipsRef.current), threshold);
+        onMoveAudioRef.current?.(session.id, snapped);
+        return;
+      }
 
       if (session.kind === "fadeIn" || session.kind === "fadeOut") {
         const maxFade = session.duration / 2;
@@ -370,14 +397,17 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
       const clip = clipsRef.current.find((item) => item.id === session.id);
       const source = clip ? sourcesRef.current[clip.sourceId] : undefined;
       if (!clip || !source) return;
-      const start = clipStartMs(clipsRef.current, session.index);
+      const track = isAudioClip(clip) ? audioTrackClips(clipsRef.current) : videoTrackClips(clipsRef.current);
+      const trackIndex = track.findIndex((item) => item.id === clip.id);
+      const clipIndex = clipsRef.current.findIndex((item) => item.id === clip.id);
+      const start = clipStartMs(clipsRef.current, clipIndex);
       const sourceAtPlayhead = session.originIn + (session.snapPlayheadMs - start);
       if (session.kind === "in") {
         const targets = [0];
         if (sourceAtPlayhead > 0 && sourceAtPlayhead < session.originOut - MIN_CLIP_MS) {
           targets.push(sourceAtPlayhead);
         }
-        const prev = clipsRef.current[session.index - 1];
+        const prev = track[trackIndex - 1];
         if (prev && prev.sourceId === clip.sourceId) targets.push(prev.outMs);
         const nextIn = clamp(
           snapValue(session.originIn + deltaMs, targets, threshold),
@@ -397,7 +427,7 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
         if (sourceAtPlayhead > session.originIn + MIN_CLIP_MS) {
           targets.push(sourceAtPlayhead);
         }
-        const nextClip = clipsRef.current[session.index + 1];
+        const nextClip = track[trackIndex + 1];
         if (nextClip && nextClip.sourceId === clip.sourceId) targets.push(nextClip.inMs);
         const nextOut = clamp(
           snapValue(session.originOut + deltaMs, targets, threshold),
@@ -444,10 +474,13 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
         setFadeTip(null);
         onFadeEndRef.current?.();
       }
+      if (session?.kind === "audioMove") {
+        onMoveAudioEndRef.current?.();
+      }
       if (session?.kind === "playhead") {
         const ms = snappedPlayhead(trackRef.current, clipsRef.current, event.clientX);
         if (ms != null) onSeekRef.current(ms);
-      } else if (session && !session.moved && session.kind === "move") {
+      } else if (session && !session.moved && (session.kind === "move" || session.kind === "audioMove")) {
         const ms = snappedPlayhead(trackRef.current, clipsRef.current, event.clientX);
         if (ms != null) onSeekRef.current(ms);
       }
@@ -480,6 +513,7 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
       originOut: 0,
       originFadeIn: 0,
       originFadeOut: 0,
+      originStart: 0,
       duration: total,
       width: trackRef.current?.getBoundingClientRect().width ?? 1,
       moved: false,
@@ -553,7 +587,13 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
               if (event.target === event.currentTarget) beginScrub(event);
             }}
           >
-            {clips.map((clip, index) => {
+            <div
+              className="rmt-timeline__lane rmt-timeline__lane--video"
+              onPointerDown={(event) => {
+                if (event.target === event.currentTarget) beginScrub(event);
+              }}
+            >
+            {videoClips.map((clip, index) => {
               const source = sources[clip.sourceId];
               const duration = Math.max(1, clip.outMs - clip.inMs);
               const thumb = thumbs?.[clip.id] ?? source?.thumb;
@@ -571,6 +611,7 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
                   aria-current={selectedId === clip.id ? "true" : undefined}
                   className={[
                     "rmt-clip",
+                    "rmt-clip--video",
                     selectedId === clip.id ? "is-selected" : "",
                     dropIndex === index ? "is-drop-target" : "",
                     trimming ? "is-trimming" : "",
@@ -600,6 +641,7 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
                       originOut: clip.outMs,
                       originFadeIn: fades.fadeInMs,
                       originFadeOut: fades.fadeOutMs,
+                      originStart: 0,
                       duration,
                       width: event.currentTarget.getBoundingClientRect().width,
                       moved: false,
@@ -627,6 +669,7 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
                         originOut: clip.outMs,
                         originFadeIn: fades.fadeInMs,
                         originFadeOut: fades.fadeOutMs,
+                      originStart: 0,
                         duration,
                         width: hostWidth,
                         moved: false,
@@ -690,6 +733,7 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
                             originOut: clip.outMs,
                             originFadeIn: fades.fadeInMs,
                             originFadeOut: fades.fadeOutMs,
+                      originStart: 0,
                             duration,
                             width: host?.getBoundingClientRect().width ?? 1,
                             moved: false,
@@ -723,6 +767,7 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
                             originOut: clip.outMs,
                             originFadeIn: fades.fadeInMs,
                             originFadeOut: fades.fadeOutMs,
+                      originStart: 0,
                             duration,
                             width: host?.getBoundingClientRect().width ?? 1,
                             moved: false,
@@ -758,6 +803,7 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
                         originOut: clip.outMs,
                         originFadeIn: fades.fadeInMs,
                         originFadeOut: fades.fadeOutMs,
+                      originStart: 0,
                         duration,
                         width: hostWidth,
                         moved: false,
@@ -777,6 +823,234 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
                 </div>
               );
             })}
+            </div>
+            {showAudioTrack && (
+              <div
+                className="rmt-timeline__lane rmt-timeline__lane--audio"
+                onPointerDown={(event) => {
+                  if (event.target === event.currentTarget) beginScrub(event);
+                }}
+              >
+                {extraAudio.length === 0 && (
+                  <div className="rmt-timeline__lane-empty">Audio track · drop audio or unlink a clip</div>
+                )}
+                {extraAudio.map((clip) => {
+                  const source = sources[clip.sourceId];
+                  const duration = Math.max(1, clip.outMs - clip.inMs);
+                  const start = audioClipStart(clip);
+                  const width = Math.max(36, duration * pps);
+                  const fades = clampFades(clip);
+                  const fadeInPct = (fades.fadeInMs / duration) * 100;
+                  const fadeOutPct = (fades.fadeOutMs / duration) * 100;
+                  const index = clips.findIndex((item) => item.id === clip.id);
+                  return (
+                    <div
+                      key={clip.id}
+                      role="group"
+                      aria-label={`${source?.name ?? "Audio"}, ${formatLength(duration)}`}
+                      aria-current={selectedId === clip.id ? "true" : undefined}
+                      className={[
+                        "rmt-clip",
+                        "rmt-clip--audio",
+                        selectedId === clip.id ? "is-selected" : "",
+                        clip.muted ? "is-muted" : "",
+                      ]
+                        .filter(Boolean)
+                        .join(" ")}
+                      style={{
+                        left: TRACK_PAD_PX + start * pps,
+                        width,
+                        minWidth: 36,
+                      }}
+                      onPointerDown={(event) => {
+                        if ((event.target as HTMLElement).closest(".rmt-clip__trim, .rmt-clip__fade-handle")) {
+                          return;
+                        }
+                        event.stopPropagation();
+                        onSelect(clip.id);
+                        drag.current = {
+                          kind: "audioMove",
+                          id: clip.id,
+                          index,
+                          startX: event.clientX,
+                          originIn: clip.inMs,
+                          originOut: clip.outMs,
+                          originFadeIn: fades.fadeInMs,
+                          originFadeOut: fades.fadeOutMs,
+                          originStart: start,
+                          duration,
+                          width: event.currentTarget.getBoundingClientRect().width,
+                          moved: false,
+                          snapPlayheadMs: playheadMs,
+                        };
+                      }}
+                    >
+                      <button
+                        type="button"
+                        className="rmt-clip__trim rmt-clip__trim--in"
+                        tabIndex={-1}
+                        aria-label="Trim start"
+                        onPointerDown={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          onSelect(clip.id);
+                          const host = event.currentTarget.parentElement;
+                          drag.current = {
+                            kind: "in",
+                            id: clip.id,
+                            index,
+                            startX: event.clientX,
+                            originIn: clip.inMs,
+                            originOut: clip.outMs,
+                            originFadeIn: fades.fadeInMs,
+                            originFadeOut: fades.fadeOutMs,
+                            originStart: start,
+                            duration,
+                            width: host?.getBoundingClientRect().width ?? 1,
+                            moved: false,
+                            snapPlayheadMs: playheadMs,
+                          };
+                          setTrimTip({
+                            edge: "in",
+                            inMs: clip.inMs,
+                            outMs: clip.outMs,
+                            x: event.clientX,
+                            y: event.clientY,
+                          });
+                        }}
+                      />
+                      <div className="rmt-clip__body">
+                        {source?.peaks && (
+                          <ClipWaveform peaks={source.peaks} inMs={clip.inMs} outMs={clip.outMs} />
+                        )}
+                        <span className="rmt-clip__name">{source?.name ?? "Audio"}</span>
+                        <span className="rmt-clip__length">{formatLength(duration)}</span>
+                      </div>
+                      {showFades && onFade && (
+                        <>
+                          {fades.fadeInMs > 0 && (
+                            <div
+                              className="rmt-clip__fade rmt-clip__fade--in"
+                              style={{ width: `${fadeInPct}%` }}
+                              aria-hidden="true"
+                            />
+                          )}
+                          {fades.fadeOutMs > 0 && (
+                            <div
+                              className="rmt-clip__fade rmt-clip__fade--out"
+                              style={{ width: `${fadeOutPct}%` }}
+                              aria-hidden="true"
+                            />
+                          )}
+                          <button
+                            type="button"
+                            className="rmt-clip__fade-handle rmt-clip__fade-handle--in"
+                            tabIndex={-1}
+                            aria-label="Fade in"
+                            style={{ left: `max(28px, ${fadeInPct}%)` }}
+                            onPointerDown={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              onSelect(clip.id);
+                              const host = event.currentTarget.parentElement;
+                              drag.current = {
+                                kind: "fadeIn",
+                                id: clip.id,
+                                index,
+                                startX: event.clientX,
+                                originIn: clip.inMs,
+                                originOut: clip.outMs,
+                                originFadeIn: fades.fadeInMs,
+                                originFadeOut: fades.fadeOutMs,
+                                originStart: start,
+                                duration,
+                                width: host?.getBoundingClientRect().width ?? 1,
+                                moved: false,
+                                snapPlayheadMs: playheadMs,
+                              };
+                              setFadeTip({
+                                edge: "in",
+                                ms: fades.fadeInMs,
+                                x: event.clientX,
+                                y: event.clientY,
+                              });
+                            }}
+                          />
+                          <button
+                            type="button"
+                            className="rmt-clip__fade-handle rmt-clip__fade-handle--out"
+                            tabIndex={-1}
+                            aria-label="Fade out"
+                            style={{ right: `max(28px, ${fadeOutPct}%)` }}
+                            onPointerDown={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              onSelect(clip.id);
+                              const host = event.currentTarget.parentElement;
+                              drag.current = {
+                                kind: "fadeOut",
+                                id: clip.id,
+                                index,
+                                startX: event.clientX,
+                                originIn: clip.inMs,
+                                originOut: clip.outMs,
+                                originFadeIn: fades.fadeInMs,
+                                originFadeOut: fades.fadeOutMs,
+                                originStart: start,
+                                duration,
+                                width: host?.getBoundingClientRect().width ?? 1,
+                                moved: false,
+                                snapPlayheadMs: playheadMs,
+                              };
+                              setFadeTip({
+                                edge: "out",
+                                ms: fades.fadeOutMs,
+                                x: event.clientX,
+                                y: event.clientY,
+                              });
+                            }}
+                          />
+                        </>
+                      )}
+                      <button
+                        type="button"
+                        className="rmt-clip__trim rmt-clip__trim--out"
+                        tabIndex={-1}
+                        aria-label="Trim end"
+                        onPointerDown={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          onSelect(clip.id);
+                          const host = event.currentTarget.parentElement;
+                          drag.current = {
+                            kind: "out",
+                            id: clip.id,
+                            index,
+                            startX: event.clientX,
+                            originIn: clip.inMs,
+                            originOut: clip.outMs,
+                            originFadeIn: fades.fadeInMs,
+                            originFadeOut: fades.fadeOutMs,
+                            originStart: start,
+                            duration,
+                            width: host?.getBoundingClientRect().width ?? 1,
+                            moved: false,
+                            snapPlayheadMs: playheadMs,
+                          };
+                          setTrimTip({
+                            edge: "out",
+                            inMs: clip.inMs,
+                            outMs: clip.outMs,
+                            x: event.clientX,
+                            y: event.clientY,
+                          });
+                        }}
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+            )}
             {total > 0 && (
               <div
                 className="rmt-timeline__playhead"
@@ -879,16 +1153,19 @@ function playheadLeftRef(scroller: HTMLDivElement | null): number {
 
 function clipElements(track: HTMLDivElement | null): HTMLElement[] {
   if (!track) return [];
-  return [...track.querySelectorAll<HTMLElement>(".rmt-clip")];
+  return [...track.querySelectorAll<HTMLElement>(".rmt-clip--video")];
 }
 
 function timeToX(track: HTMLDivElement | null, clips: EditorClip[], ms: number): number {
   if (!track || !clips.length) return TRACK_PAD_PX;
   const hit = locateClip(clips, ms);
-  const el = hit ? clipElements(track)[hit.index] : null;
+  const video = videoTrackClips(clips);
+  const videoIndex = hit ? video.findIndex((clip) => clip.id === hit.clip.id) : -1;
+  const el = videoIndex >= 0 ? clipElements(track)[videoIndex] : null;
   if (!hit || !el) return TRACK_PAD_PX;
   const duration = Math.max(1, clipDuration(hit.clip));
-  return el.offsetLeft + (hit.offsetMs / duration) * el.offsetWidth;
+  const lane = el.offsetParent instanceof HTMLElement && el.offsetParent !== track ? el.offsetParent : null;
+  return (lane?.offsetLeft ?? 0) + el.offsetLeft + (hit.offsetMs / duration) * el.offsetWidth;
 }
 
 function timeFromClientX(
@@ -898,15 +1175,20 @@ function timeFromClientX(
 ): number | null {
   if (!track || !clips.length) return null;
   const elements = clipElements(track);
-  for (let i = 0; i < clips.length; i += 1) {
-    const clip = clips[i];
+  const video = videoTrackClips(clips);
+  for (let i = 0; i < video.length; i += 1) {
+    const clip = video[i];
     const el = elements[i];
     if (!clip || !el) continue;
     const rect = el.getBoundingClientRect();
-    const isLast = i === clips.length - 1;
+    const isLast = i === video.length - 1;
     if (clientX < rect.right || isLast) {
       const ratio = clamp((clientX - rect.left) / Math.max(rect.width, 1), 0, 1);
-      return clipStartMs(clips, i) + ratio * clipDuration(clip);
+      const start = clipStartMs(
+        clips,
+        clips.findIndex((item) => item.id === clip.id),
+      );
+      return start + ratio * clipDuration(clip);
     }
   }
   return totalFrom(clips);
@@ -943,7 +1225,7 @@ function indexFromClientX(
 }
 
 function totalFrom(clips: EditorClip[]): number {
-  return clips.reduce((sum, clip) => sum + clipDuration(clip), 0);
+  return timelineDuration(clips);
 }
 
 function formatLength(ms: number): string {

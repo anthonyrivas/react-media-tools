@@ -632,12 +632,45 @@
 .rmt-timeline__track {
   position: relative;
   display: flex;
+  flex-direction: column;
+  gap: 4px;
   min-height: 72px;
   min-width: 100%;
   padding: 8px;
   overflow: hidden;
   user-select: none;
   touch-action: none;
+}
+
+.rmt-timeline__lane--video {
+  display: flex;
+  min-height: 72px;
+  min-width: 100%;
+}
+
+.rmt-timeline__lane--audio {
+  position: relative;
+  min-height: 56px;
+  min-width: 100%;
+  border-top: 1px dashed var(--rmt-border);
+}
+
+.rmt-timeline__lane-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  align-items: center;
+  padding: 0 10px;
+  color: var(--rmt-fg-muted);
+  font-size: 11px;
+  font-weight: 600;
+  pointer-events: none;
+}
+
+.rmt-clip--audio {
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
 }
 
 .rmt-clip {
