@@ -17,12 +17,17 @@ import {
 import { filenameFor } from "../browser";
 import type { ExportResult } from "../types";
 import { fitContain } from "../utils";
+import { applyEnvelopeToBuffer, clipGain } from "./audioGain";
 import { rasterizeClip } from "./probe";
 
 export type ExportClip = {
   file: Blob;
   inMs: number;
   outMs: number;
+  volume?: number;
+  muted?: boolean;
+  fadeInMs?: number;
+  fadeOutMs?: number;
 };
 
 export async function exportTimeline(options: {
@@ -117,11 +122,26 @@ export async function exportTimeline(options: {
           }
         }
 
-        if (audioSource && decoded.audioTrack && (await decoded.audioTrack.canDecode())) {
+        if (audioSource && decoded.audioTrack && (await decoded.audioTrack.canDecode()) && clipGain(clip) > 0) {
           const sink = new AudioBufferSink(decoded.audioTrack);
           for await (const chunk of sink.buffers(start, end)) {
             throwIfAborted();
-            await audioSource.add(chunk.buffer);
+            const localMs = chunk.timestamp * 1000 - clip.inMs;
+            const processed = applyEnvelopeToBuffer(
+              chunk.buffer,
+              {
+                id: "export",
+                sourceId: "export",
+                inMs: clip.inMs,
+                outMs: clip.outMs,
+                volume: clip.volume,
+                muted: clip.muted,
+                fadeInMs: clip.fadeInMs,
+                fadeOutMs: clip.fadeOutMs,
+              },
+              localMs,
+            );
+            await audioSource.add(processed);
             audioWritten += chunk.duration;
           }
         }
