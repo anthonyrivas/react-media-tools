@@ -58,6 +58,12 @@ export type EditorClip = {
   muted?: boolean;
   fadeInMs?: number;
   fadeOutMs?: number;
+  /** Defaults to `"video"`. Audio-track clips sit under the picture. */
+  kind?: "video" | "audio";
+  /** Timeline start for audio-track clips. Video clips stay magnetic and ignore this. */
+  startMs?: number;
+  /** Video clip this audio was unlinked from, if any. */
+  linkedClipId?: string;
 };
 
 export type ExportResult = {

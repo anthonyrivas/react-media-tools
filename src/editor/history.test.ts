@@ -27,6 +27,7 @@ describe("history", () => {
     expect(sameClips([{ ...clip("a"), volume: 0.5 }], [clip("a")])).toBe(false);
     expect(sameClips([{ ...clip("a"), muted: true }], [clip("a")])).toBe(false);
     expect(sameClips([{ ...clip("a"), fadeInMs: 40 }], [clip("a")])).toBe(false);
+    expect(sameClips([{ ...clip("a"), kind: "audio", startMs: 40 }], [clip("a")])).toBe(false);
   });
 
   it("undoes and redoes, clearing redo on a new push", () => {

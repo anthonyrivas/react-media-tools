@@ -29,7 +29,10 @@ export function sameClips(a: EditorClip[], b: EditorClip[]): boolean {
       (clip.volume ?? 1) === (other.volume ?? 1) &&
       Boolean(clip.muted) === Boolean(other.muted) &&
       (clip.fadeInMs ?? 0) === (other.fadeInMs ?? 0) &&
-      (clip.fadeOutMs ?? 0) === (other.fadeOutMs ?? 0)
+      (clip.fadeOutMs ?? 0) === (other.fadeOutMs ?? 0) &&
+      (clip.kind ?? "video") === (other.kind ?? "video") &&
+      (clip.startMs ?? 0) === (other.startMs ?? 0) &&
+      (clip.linkedClipId ?? "") === (other.linkedClipId ?? "")
     );
   });
 }

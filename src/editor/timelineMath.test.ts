@@ -12,7 +12,9 @@ import {
   locateClip,
   snapThresholdMs,
   snapValue,
+  timelineDuration,
   totalDuration,
+  audioClipsAt,
 } from "./timelineMath";
 
 function clip(id: string, inMs: number, outMs: number, sourceId = "src"): EditorClip {
@@ -56,5 +58,17 @@ describe("timelineMath", () => {
     expect(snapThresholdMs(0.01)).toBe(220);
     expect(MIN_CLIP_MS).toBe(120);
     expect(clamp(5, 0, 3)).toBe(3);
+  });
+
+  it("keeps audio-track clips off the magnetic video duration", () => {
+    const clips: EditorClip[] = [
+      clip("v", 0, 1000),
+      { id: "a", sourceId: "src", inMs: 0, outMs: 500, kind: "audio", startMs: 800 },
+    ];
+    expect(totalDuration(clips)).toBe(1000);
+    expect(timelineDuration(clips)).toBe(1300);
+    expect(locateClip(clips, 900)?.clip.id).toBe("v");
+    expect(audioClipsAt(clips, 900).map((item) => item.id)).toEqual(["a"]);
+    expect(audioClipsAt(clips, 200)).toEqual([]);
   });
 });
