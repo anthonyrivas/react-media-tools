@@ -6,6 +6,7 @@ describe("probeMedia", () => {
     await expect(probeMedia(new Blob(["not media"]), { durationMs: 1500 })).resolves.toMatchObject({
       durationMs: 1500,
       hasAudio: false,
+      hasVideo: false,
     });
   });
 });
