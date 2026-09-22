@@ -21,11 +21,16 @@ vi.mock("./waveform", () => ({
 }));
 
 const exportTimeline = vi.fn();
+const measureClipPeak = vi.fn(async () => 0.5);
 vi.mock("./exportTimeline", () => ({
   exportTimeline: (...args: unknown[]) => exportTimeline(...args),
 }));
+vi.mock("./exportAudio", () => ({
+  measureClipPeak: (...args: unknown[]) => measureClipPeak(...args),
+}));
 
 import { VideoEditor } from "./VideoEditor";
+import { NORMALIZE_PEAK } from "./audioGain";
 
 const exported = {
   blob: new Blob(["edit"]),
@@ -40,6 +45,8 @@ describe("VideoEditor", () => {
   afterEach(() => {
     cleanup();
     exportTimeline.mockReset();
+    measureClipPeak.mockReset();
+    measureClipPeak.mockResolvedValue(0.5);
   });
 
   it("ingests a source, uses custom export copy, and exports", async () => {
@@ -101,6 +108,32 @@ describe("VideoEditor", () => {
 
     await waitFor(() => {
       expect(screen.getAllByText("Take 1")).toHaveLength(2);
+    });
+  });
+
+  it("mutes the selected clip and normalizes its gain", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const ref = createRef<VideoEditorHandle>();
+    render(<VideoEditor ref={ref} onChange={onChange} />);
+
+    await ref.current?.addSource({
+      file: new Blob(["video"]),
+      name: "Take 1",
+      durationMs: 2000,
+    });
+    await waitFor(() => expect(screen.getByText("Take 1")).toBeInTheDocument());
+
+    await user.click(screen.getByRole("button", { name: "Mute" }));
+    expect(screen.getByRole("button", { name: "Unmute" })).toHaveAttribute("aria-pressed", "true");
+    expect(onChange.mock.calls.at(-1)?.[0]?.[0]).toMatchObject({ muted: true });
+
+    await user.click(screen.getByRole("button", { name: "Normalize" }));
+    await waitFor(() => {
+      expect(measureClipPeak).toHaveBeenCalled();
+      const clips = onChange.mock.calls.at(-1)?.[0] as Array<{ volume?: number; muted?: boolean }>;
+      expect(clips[0]?.muted).toBe(false);
+      expect(clips[0]?.volume).toBeCloseTo(NORMALIZE_PEAK / 0.5);
     });
   });
 });

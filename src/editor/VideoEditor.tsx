@@ -14,8 +14,26 @@ import { cloneSnapshot, createHistory, sameClips, type EditorSnapshot } from "./
 import { extractThumbnail, probeMedia } from "./probe";
 import { Timeline, type TimelineHandle, type TimelineSource } from "./Timeline";
 import { IconButton } from "../IconButton";
-import { IconDownload, IconOpen, IconPause, IconPlay, IconRedo, IconSplit, IconTrash, IconUndo } from "../icons";
+import {
+  IconDownload,
+  IconMute,
+  IconOpen,
+  IconPause,
+  IconPlay,
+  IconRedo,
+  IconSpeaker,
+  IconSplit,
+  IconTrash,
+  IconUndo,
+} from "../icons";
 import { extractPeaks } from "./waveform";
+import {
+  MAX_GAIN,
+  envelopeAt,
+  normalizedVolume,
+  withClampedAudio,
+} from "./audioGain";
+import { measureClipPeak } from "./exportAudio";
 import {
   FRAME_MS,
   MIN_CLIP_MS,
@@ -35,6 +53,7 @@ export type VideoEditorHandle = {
   redo: () => void;
   exportVideo: () => Promise<ExportResult | null>;
   download: (filename?: string) => void;
+  normalizeSelected: () => Promise<void>;
 };
 
 export type VideoEditorProps = {
@@ -110,9 +129,14 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
     const editorActiveRef = useRef(false);
     const historyRef = useRef(createHistory());
     const trimBeforeRef = useRef<EditorSnapshot | null>(null);
+    const fadeBeforeRef = useRef<EditorSnapshot | null>(null);
+    const gainBeforeRef = useRef<EditorSnapshot | null>(null);
     const applyingHistoryRef = useRef(false);
     const [canUndo, setCanUndo] = useState(false);
     const [canRedo, setCanRedo] = useState(false);
+    const audioCtxRef = useRef<AudioContext | null>(null);
+    const gainNodeRef = useRef<GainNode | null>(null);
+    const mediaSourceRef = useRef<MediaElementAudioSourceNode | null>(null);
 
     clipsRef.current = clips;
     sourcesRef.current = sourceMap;
@@ -158,6 +182,18 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
       historyRef.current.push(captureState());
       syncHistoryButtons();
     }, [captureState, syncHistoryButtons]);
+
+    const commitCoalesced = useCallback(
+      (beforeRef: React.MutableRefObject<EditorSnapshot | null>) => {
+        const before = beforeRef.current;
+        beforeRef.current = null;
+        if (before && !sameClips(before.clips, clipsRef.current)) {
+          historyRef.current.push(before);
+          syncHistoryButtons();
+        }
+      },
+      [syncHistoryButtons],
+    );
 
     const rememberThumb = useCallback((clipId: string, url?: string) => {
       if (!url) return;
@@ -224,12 +260,12 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
     const appendClip = useCallback(
       (sourceId: string, durationMs: number, file: Blob) => {
         recordHistory();
-        const clip: EditorClip = {
+        const clip = withClampedAudio({
           id: uid("clip"),
           sourceId,
           inMs: 0,
           outMs: durationMs,
-        };
+        });
         const start = totalDuration(clipsRef.current);
         setClips((current) => {
           const next = [...current, clip];
@@ -310,6 +346,7 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
         Object.values(thumbsRef.current).forEach((url) => {
           if (url.startsWith("blob:")) URL.revokeObjectURL(url);
         });
+        void audioCtxRef.current?.close().catch(() => undefined);
       };
     }, []);
 
@@ -317,6 +354,37 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
       if (playing) return;
       videoRef.current?.pause();
     }, [playing]);
+
+    const connectGraph = useCallback(() => {
+      const video = videoRef.current;
+      if (!video || mediaSourceRef.current) return;
+      const AudioCtx =
+        window.AudioContext ||
+        (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      if (!AudioCtx) return;
+      try {
+        const ctx = new AudioCtx();
+        const gain = ctx.createGain();
+        const source = ctx.createMediaElementSource(video);
+        source.connect(gain);
+        gain.connect(ctx.destination);
+        audioCtxRef.current = ctx;
+        gainNodeRef.current = gain;
+        mediaSourceRef.current = source;
+      } catch {
+        mediaSourceRef.current = null;
+      }
+    }, []);
+
+    const applyLiveGain = useCallback((clip: EditorClip | null, localMs: number) => {
+      const value = clip ? envelopeAt(clip, localMs) : 1;
+      if (gainNodeRef.current) {
+        gainNodeRef.current.gain.value = value;
+        return;
+      }
+      const video = videoRef.current;
+      if (video) video.volume = Math.min(1, Math.max(0, value));
+    }, []);
 
     const showClip = useCallback(
       async (index: number, offsetMs: number, autoplay: boolean) => {
@@ -330,9 +398,13 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
         const gen = (syncGenRef.current += 1);
         seekingRef.current = true;
         clipIndexRef.current = index;
-        const target = (clip.inMs + clamp(offsetMs, 0, clipDuration(clip))) / 1000;
+        const local = clamp(offsetMs, 0, clipDuration(clip));
+        const target = (clip.inMs + local) / 1000;
+        applyLiveGain(clip, local);
 
         try {
+          connectGraph();
+          if (autoplay) void audioCtxRef.current?.resume();
           if (loadedSourceIdRef.current !== source.id) {
             video.src = source.url;
             loadedSourceIdRef.current = source.id;
@@ -354,7 +426,7 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
           if (gen === syncGenRef.current) seekingRef.current = false;
         }
       },
-      [],
+      [applyLiveGain, connectGraph],
     );
 
     const syncToPlayhead = useCallback(
@@ -371,10 +443,11 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
         const next = setPlayhead(ms);
         const hit = locateClip(clipsRef.current, next);
         if (hit) clipIndexRef.current = hit.index;
+        if (hit) applyLiveGain(hit.clip, hit.offsetMs);
         void syncToPlayhead(next, playingRef.current);
         return next;
       },
-      [setPlayhead, syncToPlayhead],
+      [applyLiveGain, setPlayhead, syncToPlayhead],
     );
 
     useEffect(() => {
@@ -393,9 +466,10 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
       if (playheadRef.current > total) setPlayhead(total);
       const hit = locateClip(clips, playheadRef.current);
       if (hit) clipIndexRef.current = hit.index;
+      if (hit) applyLiveGain(hit.clip, hit.offsetMs);
       if (skipClipSyncRef.current) return;
       if (!playingRef.current) void syncToPlayhead(playheadRef.current, false);
-    }, [clips, setPlayhead, syncToPlayhead]);
+    }, [applyLiveGain, clips, setPlayhead, syncToPlayhead]);
 
     useEffect(() => {
       if (!playing) return;
@@ -425,6 +499,7 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
 
         clipIndexRef.current = index + 1;
         setPlayhead(clipStartMs(clipsNow, index + 1));
+        applyLiveGain(nextClip, 0);
 
         const timeMs = video.currentTime * 1000;
         const sameSource =
@@ -456,7 +531,9 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
           if (sourceTime >= clip.outMs || video.ended) {
             goToNextClip();
           } else if (sourceTime >= clip.inMs) {
-            setPlayhead(clipStartMs(clipsNow, index) + (sourceTime - clip.inMs));
+            const local = sourceTime - clip.inMs;
+            setPlayhead(clipStartMs(clipsNow, index) + local);
+            applyLiveGain(clip, local);
             keepPlaying();
           }
         }
@@ -468,6 +545,7 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
       };
 
       video.addEventListener("ended", onEnded);
+      void audioCtxRef.current?.resume();
 
       const hit = locateClip(clipsRef.current, playheadRef.current);
       void (hit ? showClip(hit.index, hit.offsetMs, true) : Promise.resolve()).then(() => {
@@ -479,7 +557,7 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
         cancelAnimationFrame(raf);
         video.removeEventListener("ended", onEnded);
       };
-    }, [playing, setPlayhead, showClip]);
+    }, [applyLiveGain, playing, setPlayhead, showClip]);
 
     const togglePlay = useCallback(() => {
       if (!clipsRef.current.length) return;
@@ -487,14 +565,18 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
         setPlayhead(0);
         clipIndexRef.current = 0;
       }
+      connectGraph();
+      void audioCtxRef.current?.resume();
       setPlaying((value) => !value);
-    }, [setPlayhead]);
+    }, [connectGraph, setPlayhead]);
 
     const handleTrim = useCallback(
       (id: string, inMs: number, outMs: number, edge: "in" | "out") => {
         if (!trimBeforeRef.current) trimBeforeRef.current = captureState();
         skipClipSyncRef.current = true;
-        const next = clipsRef.current.map((clip) => (clip.id === id ? { ...clip, inMs, outMs } : clip));
+        const next = clipsRef.current.map((clip) =>
+          clip.id === id ? withClampedAudio({ ...clip, inMs, outMs }) : clip,
+        );
         clipsRef.current = next;
         setClips(next);
         onChange?.(next);
@@ -511,17 +593,77 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
     );
 
     const handleTrimEnd = useCallback(() => {
-      const before = trimBeforeRef.current;
-      trimBeforeRef.current = null;
-      if (before && !sameClips(before.clips, clipsRef.current)) {
-        historyRef.current.push(before);
-        syncHistoryButtons();
-      }
+      commitCoalesced(trimBeforeRef);
       skipClipSyncRef.current = false;
       const hit = locateClip(clipsRef.current, playheadRef.current);
       if (hit) void captureThumb(hit.clip);
       if (!playingRef.current) void syncToPlayhead(playheadRef.current, false);
-    }, [captureThumb, syncHistoryButtons, syncToPlayhead]);
+    }, [captureThumb, commitCoalesced, syncToPlayhead]);
+
+    const patchClip = useCallback(
+      (id: string, patch: Partial<EditorClip>) => {
+        const next = clipsRef.current.map((clip) =>
+          clip.id === id ? withClampedAudio({ ...clip, ...patch }) : clip,
+        );
+        clipsRef.current = next;
+        setClips(next);
+        onChange?.(next);
+        const hit = locateClip(next, playheadRef.current);
+        if (hit) applyLiveGain(hit.clip, hit.offsetMs);
+      },
+      [applyLiveGain, onChange],
+    );
+
+    const handleFade = useCallback(
+      (id: string, fadeInMs: number, fadeOutMs: number) => {
+        if (!fadeBeforeRef.current) fadeBeforeRef.current = captureState();
+        patchClip(id, { fadeInMs, fadeOutMs });
+      },
+      [captureState, patchClip],
+    );
+
+    const handleFadeEnd = useCallback(() => {
+      commitCoalesced(fadeBeforeRef);
+    }, [commitCoalesced]);
+
+    const handleGainInput = useCallback(
+      (percent: number) => {
+        const id = selectedIdRef.current;
+        if (!id) return;
+        if (!gainBeforeRef.current) gainBeforeRef.current = captureState();
+        patchClip(id, { volume: clamp(percent / 100, 0, MAX_GAIN), muted: false });
+      },
+      [captureState, patchClip],
+    );
+
+    const handleGainCommit = useCallback(() => {
+      commitCoalesced(gainBeforeRef);
+    }, [commitCoalesced]);
+
+    const toggleMute = useCallback(() => {
+      const clip = clipsRef.current.find((item) => item.id === selectedIdRef.current);
+      if (!clip) return;
+      recordHistory();
+      patchClip(clip.id, { muted: !clip.muted });
+    }, [patchClip, recordHistory]);
+
+    const normalizeSelected = useCallback(async () => {
+      const clip = clipsRef.current.find((item) => item.id === selectedIdRef.current);
+      const file = clip ? sourcesRef.current[clip.sourceId]?.file : undefined;
+      if (!clip || !file) return;
+      setBusy(true);
+      setError(null);
+      try {
+        const peak = await measureClipPeak(file, clip.inMs, clip.outMs);
+        if (!(peak > 0)) throw new Error("Could not measure this clip for normalize.");
+        recordHistory();
+        patchClip(clip.id, { volume: normalizedVolume(peak), muted: false });
+      } catch (err) {
+        report(err);
+      } finally {
+        setBusy(false);
+      }
+    }, [patchClip, recordHistory, report]);
 
     const handleScrub = useCallback(
       (ms: number) => {
@@ -532,6 +674,7 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
         if (hit) {
           clipIndexRef.current = hit.index;
           setSelectedId(hit.clip.id);
+          applyLiveGain(hit.clip, hit.offsetMs);
         }
         pendingScrub.current = next;
         if (scrubRaf.current) return;
@@ -541,7 +684,7 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
           if (time != null) void syncToPlayhead(time, false);
         });
       },
-      [setPlayhead, syncToPlayhead],
+      [applyLiveGain, setPlayhead, syncToPlayhead],
     );
 
     const handleReorder = useCallback(
@@ -707,8 +850,8 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
 
     useImperativeHandle(
       ref,
-      () => ({ addSource, split, deleteSelected, undo, redo, exportVideo, download }),
-      [addSource, deleteSelected, download, exportVideo, redo, split, undo],
+      () => ({ addSource, split, deleteSelected, undo, redo, exportVideo, download, normalizeSelected }),
+      [addSource, deleteSelected, download, exportVideo, normalizeSelected, redo, split, undo],
     );
 
     useEffect(() => {
@@ -787,6 +930,11 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
           split();
           return;
         }
+        if (event.key === "m" || event.key === "M") {
+          event.preventDefault();
+          toggleMute();
+          return;
+        }
         if (event.key === "Backspace" || event.key === "Delete") {
           if (!selectedIdRef.current) return;
           event.preventDefault();
@@ -810,11 +958,12 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
       };
       window.addEventListener("keydown", onKey);
       return () => window.removeEventListener("keydown", onKey);
-    }, [deleteSelected, handleScrub, redo, split, togglePlay, undo]);
+    }, [deleteSelected, handleScrub, redo, split, toggleMute, togglePlay, undo]);
 
     const shortcutMod =
       typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘" : "Ctrl";
     const selected = clips.find((clip) => clip.id === selectedId) ?? null;
+    const gainPercent = Math.round((selected?.volume ?? 1) * 100);
 
     return (
       <div
@@ -898,6 +1047,45 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
           </div>
         </div>
 
+        <div className="rmt-editor__mixer">
+          <IconButton
+            label={selected?.muted ? "Unmute" : "Mute"}
+            shortcut="M"
+            disabled={!selected}
+            pressed={Boolean(selected?.muted)}
+            onClick={toggleMute}
+          >
+            {selected?.muted ? <IconMute /> : <IconSpeaker />}
+          </IconButton>
+          <label className="rmt-editor__gain">
+            Gain
+            <input
+              type="range"
+              min={0}
+              max={200}
+              step={1}
+              value={gainPercent}
+              disabled={!selected}
+              aria-label="Gain"
+              aria-valuetext={`${gainPercent} percent`}
+              onChange={(event) => handleGainInput(Number(event.target.value))}
+              onPointerUp={handleGainCommit}
+              onBlur={handleGainCommit}
+            />
+            <span className="rmt-editor__gain-value">
+              {selected ? (selected.muted ? "Muted" : `${gainPercent}%`) : "—"}
+            </span>
+          </label>
+          <button
+            type="button"
+            className="rmt-btn"
+            disabled={!selected || busy}
+            onClick={() => void normalizeSelected()}
+          >
+            Normalize
+          </button>
+        </div>
+
         <div
           className={[
             "rmt-editor__preview",
@@ -960,7 +1148,10 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
           onScrub={handleScrub}
           onTrim={handleTrim}
           onTrimEnd={handleTrimEnd}
+          onFade={handleFade}
+          onFadeEnd={handleFadeEnd}
           onReorder={handleReorder}
+          showFades
         />
 
         {error && (
