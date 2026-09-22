@@ -23,6 +23,7 @@ import {
   IconRedo,
   IconSpeaker,
   IconSplit,
+  IconSplitTracks,
   IconTrash,
   IconUndo,
   IconUnlink,
@@ -41,10 +42,13 @@ import {
   SKIP_MS,
   audioClipEnd,
   audioClipStart,
+  audioClipsAt,
   audioTrackClips,
   clamp,
   clipDuration,
+  clipHasPlayableAudio,
   clipStartMs,
+  hasDetachedAudio,
   isAudioClip,
   isVideoClip,
   locateClip,
@@ -55,7 +59,7 @@ import {
 
 export type VideoEditorHandle = {
   addSource: (input: EditorInput | Blob, name?: string) => Promise<void>;
-  split: () => void;
+  split: (allTracks?: boolean) => void;
   deleteSelected: () => void;
   undo: () => void;
   redo: () => void;
@@ -87,6 +91,7 @@ type LoadedSource = TimelineSource & {
   url: string;
   width: number;
   height: number;
+  hasAudio: boolean;
 };
 
 export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
@@ -354,6 +359,7 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
             durationMs,
             width: audioOnly ? 0 : item.width || probed.width || 1280,
             height: audioOnly ? 0 : item.height || probed.height || 720,
+            hasAudio: audioOnly || probed.hasAudio,
           };
           setSourceMap((current) => ({ ...current, [id]: loaded }));
           if (audioOnly) appendAudioClip(id, durationMs);
@@ -401,7 +407,18 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
 
     const connectGraph = useCallback(() => {
       const video = videoRef.current;
-      if (!video || mediaSourceRef.current) return;
+      if (!video) return;
+      if (audioCtxRef.current?.state === "closed") {
+        audioCtxRef.current = null;
+        mediaSourceRef.current = null;
+        gainNodeRef.current = null;
+        extraConnected.current.clear();
+        extraGainNodes.current.clear();
+      }
+      if (mediaSourceRef.current) {
+        void audioCtxRef.current?.resume();
+        return;
+      }
       const AudioCtx =
         window.AudioContext ||
         (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
@@ -415,26 +432,29 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
         audioCtxRef.current = ctx;
         gainNodeRef.current = gain;
         mediaSourceRef.current = source;
+        gain.gain.value = 0;
+        void ctx.resume();
       } catch {
         mediaSourceRef.current = null;
       }
     }, []);
 
     const applyLiveGain = useCallback((clip: EditorClip | null, localMs: number) => {
-      const value = clip ? envelopeAt(clip, localMs) : 1;
-      if (gainNodeRef.current) {
-        gainNodeRef.current.gain.value = value;
-        return;
-      }
+      const detached = clip != null && hasDetachedAudio(clipsRef.current, clip.id);
+      const value = !clip || detached ? 0 : envelopeAt(clip, localMs);
       const video = videoRef.current;
-      if (video) video.volume = Math.min(1, Math.max(0, value));
+      if (video) {
+        video.muted = value <= 0;
+        video.volume = Math.min(1, Math.max(0, value));
+      }
+      if (gainNodeRef.current) gainNodeRef.current.gain.value = value;
     }, []);
 
     const connectExtra = useCallback(
       (id: string, el: HTMLAudioElement) => {
         connectGraph();
         const ctx = audioCtxRef.current;
-        if (!ctx || extraConnected.current.has(id)) return;
+        if (!ctx || ctx.state === "closed" || extraConnected.current.has(id)) return;
         try {
           const gain = ctx.createGain();
           const source = ctx.createMediaElementSource(el);
@@ -442,8 +462,9 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
           gain.connect(ctx.destination);
           extraGainNodes.current.set(id, gain);
           extraConnected.current.add(id);
+          void ctx.resume();
         } catch {
-          extraConnected.current.add(id);
+          extraGainNodes.current.delete(id);
         }
       },
       [connectGraph],
@@ -470,13 +491,14 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
           const local = clamp(ms - start, 0, clipDuration(clip));
           const gain = inRange ? envelopeAt(clip, local) : 0;
           const gainNode = extraGainNodes.current.get(id);
+          el.muted = false;
           if (gainNode) gainNode.gain.value = gain;
           else el.volume = Math.min(1, Math.max(0, gain));
           if (el.dataset.sourceId !== source.id) {
             el.src = source.url;
             el.dataset.sourceId = source.id;
           }
-          if (!inRange) {
+          if (!inRange || gain <= 0) {
             if (!el.paused) el.pause();
             return;
           }
@@ -506,10 +528,10 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
         clipIndexRef.current = index;
         const local = clamp(offsetMs, 0, clipDuration(clip));
         const target = (clip.inMs + local) / 1000;
-        applyLiveGain(clip, local);
 
         try {
           connectGraph();
+          applyLiveGain(clip, local);
           if (autoplay) void audioCtxRef.current?.resume();
           if (loadedSourceIdRef.current !== source.id) {
             video.src = source.url;
@@ -686,11 +708,13 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
 
       video.addEventListener("ended", onEnded);
       void audioCtxRef.current?.resume();
+      syncExtraAudio(playheadRef.current, true);
 
       const hit = locateClip(clipsRef.current, playheadRef.current);
       void (hit ? showClip(hit.index, hit.offsetMs, true) : Promise.resolve()).then(() => {
+        if (!active) return;
         syncExtraAudio(playheadRef.current, true);
-        if (active) raf = requestAnimationFrame(tick);
+        raf = requestAnimationFrame(tick);
       });
 
       return () => {
@@ -711,8 +735,9 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
       }
       connectGraph();
       void audioCtxRef.current?.resume();
+      if (!playingRef.current) syncExtraAudio(playheadRef.current, true);
       setPlaying((value) => !value);
-    }, [connectGraph, setPlayhead]);
+    }, [connectGraph, setPlayhead, syncExtraAudio]);
 
     const handleTrim = useCallback(
       (id: string, inMs: number, outMs: number, edge: "in" | "out") => {
@@ -779,9 +804,12 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
     const handleGainInput = useCallback(
       (percent: number) => {
         const id = selectedIdRef.current;
-        if (!id) return;
+        const clip = clipsRef.current.find((item) => item.id === id);
+        if (!clip) return;
+        const source = sourcesRef.current[clip.sourceId];
+        if (!clipHasPlayableAudio(clipsRef.current, clip, source?.hasAudio !== false)) return;
         if (!gainBeforeRef.current) gainBeforeRef.current = captureState();
-        patchClip(id, { volume: clamp(percent / 100, 0, MAX_GAIN), muted: false });
+        patchClip(clip.id, { volume: clamp(percent / 100, 0, MAX_GAIN), muted: false });
       },
       [captureState, patchClip],
     );
@@ -793,6 +821,8 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
     const toggleMute = useCallback(() => {
       const clip = clipsRef.current.find((item) => item.id === selectedIdRef.current);
       if (!clip) return;
+      const source = sourcesRef.current[clip.sourceId];
+      if (!clipHasPlayableAudio(clipsRef.current, clip, source?.hasAudio !== false)) return;
       recordHistory();
       patchClip(clip.id, { muted: !clip.muted });
     }, [patchClip, recordHistory]);
@@ -802,6 +832,7 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
       const clip = clipsNow.find((item) => item.id === selectedIdRef.current);
       if (!clip || isAudioClip(clip)) return;
       if (clipsNow.some((item) => item.linkedClipId === clip.id)) return;
+      if (sourcesRef.current[clip.sourceId]?.hasAudio === false) return;
       recordHistory();
       const index = clipsNow.findIndex((item) => item.id === clip.id);
       const audio = withClampedAudio({
@@ -824,14 +855,17 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
       setClips(next);
       onChange?.(next);
       setSelectedId(audio.id);
+      connectGraph();
       applyLiveGain({ ...clip, muted: true }, 0);
       syncExtraAudio(playheadRef.current, playingRef.current);
-    }, [applyLiveGain, onChange, recordHistory, syncExtraAudio]);
+    }, [applyLiveGain, connectGraph, onChange, recordHistory, syncExtraAudio]);
 
     const normalizeSelected = useCallback(async () => {
       const clip = clipsRef.current.find((item) => item.id === selectedIdRef.current);
-      const file = clip ? sourcesRef.current[clip.sourceId]?.file : undefined;
+      const source = clip ? sourcesRef.current[clip.sourceId] : undefined;
+      const file = source?.file;
       if (!clip || !file) return;
+      if (!clipHasPlayableAudio(clipsRef.current, clip, source.hasAudio !== false)) return;
       setBusy(true);
       setError(null);
       try {
@@ -912,54 +946,80 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
       [seek],
     );
 
-    const split = useCallback(() => {
-      const clipsNow = clipsRef.current;
-      const selected = clipsNow.find((clip) => clip.id === selectedIdRef.current);
-      if (selected && isAudioClip(selected)) {
-        const start = audioClipStart(selected);
-        const local = playheadRef.current - start;
-        const sourceLocal = selected.inMs + local;
-        if (local <= MIN_CLIP_MS || local >= clipDuration(selected) - MIN_CLIP_MS) return;
-        recordHistory();
-        const left: EditorClip = { ...selected, id: uid("clip"), outMs: sourceLocal };
-        const right: EditorClip = {
-          ...selected,
-          id: uid("clip"),
-          inMs: sourceLocal,
-          startMs: playheadRef.current,
+    const split = useCallback(
+      (allTracks = false) => {
+        const clipsNow = clipsRef.current;
+        const playhead = playheadRef.current;
+        const replacements = new Map<string, { left: EditorClip; right: EditorClip }>();
+
+        const takeVideo = () => {
+          const hit = locateClip(clipsNow, playhead);
+          if (!hit) return;
+          const parts = splitVideoClip(hit.clip, hit.offsetMs);
+          if (parts) replacements.set(hit.clip.id, { left: parts[0], right: parts[1] });
         };
-        const index = clipsNow.findIndex((clip) => clip.id === selected.id);
-        setClips((current) => {
-          const next = [...current.slice(0, index), left, right, ...current.slice(index + 1)];
+
+        const takeAudio = (clip: EditorClip) => {
+          const parts = splitAudioClip(clip, playhead);
+          if (parts) replacements.set(clip.id, { left: parts[0], right: parts[1] });
+        };
+
+        if (allTracks) {
+          takeVideo();
+          audioClipsAt(clipsNow, playhead).forEach(takeAudio);
+        } else {
+          const selected = clipsNow.find((clip) => clip.id === selectedIdRef.current);
+          if (selected && isAudioClip(selected)) takeAudio(selected);
+          else takeVideo();
+        }
+
+        if (!replacements.size) return;
+        recordHistory();
+
+        for (const { left, right } of replacements.values()) {
+          if (!isAudioClip(left) || !left.linkedClipId) continue;
+          const parent = replacements.get(left.linkedClipId);
+          if (!parent) continue;
+          left.linkedClipId = parent.left.id;
+          right.linkedClipId = parent.right.id;
+        }
+
+        const next: EditorClip[] = [];
+        for (const clip of clipsNow) {
+          const parts = replacements.get(clip.id);
+          if (parts) next.push(parts.left, parts.right);
+          else if (clip.linkedClipId && replacements.has(clip.linkedClipId)) {
+            const parent = replacements.get(clip.linkedClipId);
+            next.push(parent ? { ...clip, linkedClipId: parent.left.id } : clip);
+          } else {
+            next.push(clip);
+          }
+        }
+
+        setClips(() => {
           onChange?.(next);
           return next;
         });
-        setSelectedId(right.id);
-        return;
-      }
-      const hit = locateClip(clipsNow, playheadRef.current);
-      if (!hit) return;
-      const local = hit.clip.inMs + hit.offsetMs;
-      if (local <= hit.clip.inMs + MIN_CLIP_MS || local >= hit.clip.outMs - MIN_CLIP_MS) return;
-      recordHistory();
-      const left: EditorClip = { ...hit.clip, id: uid("clip"), outMs: local };
-      const right: EditorClip = { ...hit.clip, id: uid("clip"), inMs: local };
-      setClips((current) => {
-        const next = [...current.slice(0, hit.index), left, right, ...current.slice(hit.index + 1)];
-        onChange?.(next);
-        return next;
-      });
-      setSelectedId(right.id);
-      clipIndexRef.current = clipsRef.current.findIndex((clip) => clip.id === right.id);
-      setClipThumbs((current) => {
-        const inherited = current[hit.clip.id];
-        const next = { ...current };
-        delete next[hit.clip.id];
-        if (inherited) next[left.id] = inherited;
-        return next;
-      });
-      void captureThumb(right);
-    }, [captureThumb, onChange, recordHistory]);
+
+        const selectedParts = replacements.get(selectedIdRef.current ?? "");
+        const videoHit = locateClip(clipsNow, playhead);
+        const videoParts = videoHit ? replacements.get(videoHit.clip.id) : undefined;
+        const nextSelected = selectedParts?.right ?? videoParts?.right;
+        if (nextSelected) setSelectedId(nextSelected.id);
+        if (videoParts) {
+          clipIndexRef.current = next.findIndex((clip) => clip.id === videoParts.right.id);
+          setClipThumbs((current) => {
+            const inherited = current[videoHit?.clip.id ?? ""];
+            const thumbsNext = { ...current };
+            if (videoHit) delete thumbsNext[videoHit.clip.id];
+            if (inherited) thumbsNext[videoParts.left.id] = inherited;
+            return thumbsNext;
+          });
+          void captureThumb(videoParts.right);
+        }
+      },
+      [captureThumb, onChange, recordHistory],
+    );
 
     const deleteSelected = useCallback(() => {
       const id = selectedIdRef.current;
@@ -1004,7 +1064,7 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
             inMs: clip.inMs,
             outMs: clip.outMs,
             volume: clip.volume,
-            muted: clip.muted,
+            muted: Boolean(clip.muted) || hasDetachedAudio(clips, clip.id),
             fadeInMs: clip.fadeInMs,
             fadeOutMs: clip.fadeOutMs,
             kind: clip.kind,
@@ -1166,7 +1226,7 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
         }
         if (event.key === "s" || event.key === "S") {
           event.preventDefault();
-          split();
+          split(event.shiftKey);
           return;
         }
         if (event.key === "m" || event.key === "M") {
@@ -1207,9 +1267,12 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
     const shortcutMod =
       typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘" : "Ctrl";
     const selected = clips.find((clip) => clip.id === selectedId) ?? null;
+    const selectedSource = selected ? sourceMap[selected.sourceId] : undefined;
+    const mixerEnabled =
+      selected != null && clipHasPlayableAudio(clips, selected, selectedSource?.hasAudio !== false);
     const gainPercent = Math.round((selected?.volume ?? 1) * 100);
-    const canUnlink =
-      selected != null && isVideoClip(selected) && !clips.some((item) => item.linkedClipId === selected.id);
+    const canUnlink = selected != null && mixerEnabled && isVideoClip(selected);
+    const audioMoved = selected != null && isVideoClip(selected) && hasDetachedAudio(clips, selected.id);
 
     return (
       <div
@@ -1227,8 +1290,16 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
       >
         <div className="rmt-editor__toolbar" role="toolbar" aria-label="Editor tools">
           <div className="rmt-editor__tools">
-            <IconButton label="Split" shortcut="S" disabled={!clips.length} onClick={split}>
+            <IconButton label="Split" shortcut="S" disabled={!clips.length} onClick={() => split()}>
               <IconSplit />
+            </IconButton>
+            <IconButton
+              label="Split all tracks"
+              shortcut="Shift+S"
+              disabled={!clips.length}
+              onClick={() => split(true)}
+            >
+              <IconSplitTracks />
             </IconButton>
             <IconButton label="Delete" shortcut="Delete" disabled={!selected} onClick={deleteSelected}>
               <IconTrash />
@@ -1295,13 +1366,13 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
 
         <div className="rmt-editor__mixer">
           <IconButton
-            label={selected?.muted ? "Unmute" : "Mute"}
+            label={selected?.muted || audioMoved ? "Unmute" : "Mute"}
             shortcut="M"
-            disabled={!selected}
-            pressed={Boolean(selected?.muted)}
+            disabled={!mixerEnabled}
+            pressed={Boolean(selected?.muted) || audioMoved}
             onClick={toggleMute}
           >
-            {selected?.muted ? <IconMute /> : <IconSpeaker />}
+            {selected?.muted || audioMoved ? <IconMute /> : <IconSpeaker />}
           </IconButton>
           <IconButton
             label="Unlink audio"
@@ -1318,22 +1389,22 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
               min={0}
               max={200}
               step={1}
-              value={gainPercent}
-              disabled={!selected}
+              value={mixerEnabled ? gainPercent : 100}
+              disabled={!mixerEnabled}
               aria-label="Gain"
-              aria-valuetext={`${gainPercent} percent`}
+              aria-valuetext={mixerEnabled ? `${gainPercent} percent` : "No audio"}
               onChange={(event) => handleGainInput(Number(event.target.value))}
               onPointerUp={handleGainCommit}
               onBlur={handleGainCommit}
             />
             <span className="rmt-editor__gain-value">
-              {selected ? (selected.muted ? "Muted" : `${gainPercent}%`) : "—"}
+              {!selected ? "—" : !mixerEnabled ? "No audio" : selected.muted ? "Muted" : `${gainPercent}%`}
             </span>
           </label>
           <button
             type="button"
             className="rmt-btn"
-            disabled={!selected || busy}
+            disabled={!mixerEnabled || busy}
             onClick={() => void normalizeSelected()}
           >
             Normalize
@@ -1358,18 +1429,18 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
             preload="auto"
             aria-hidden="true"
           />
-          <div className="rmt-sr-only" aria-hidden="true">
-            {extraAudio.map((clip) => (
-              <audio
-                key={clip.id}
-                ref={(node) => {
-                  if (node) extraAudioEls.current.set(clip.id, node);
-                  else extraAudioEls.current.delete(clip.id);
-                }}
-                preload="auto"
-              />
-            ))}
-          </div>
+          {extraAudio.map((clip) => (
+            <audio
+              key={clip.id}
+              className="rmt-editor__audio"
+              ref={(node) => {
+                if (node) extraAudioEls.current.set(clip.id, node);
+                else extraAudioEls.current.delete(clip.id);
+              }}
+              preload="auto"
+              playsInline
+            />
+          ))}
           {!clips.length && (
             <div className="rmt-editor__empty">
               <strong>No clips yet</strong>
@@ -1446,6 +1517,26 @@ function sourceIdFor(file: Blob): string {
   const id = uid("src");
   blobIds.set(file, id);
   return id;
+}
+
+function splitVideoClip(clip: EditorClip, offsetMs: number): [EditorClip, EditorClip] | null {
+  const sourceLocal = clip.inMs + offsetMs;
+  if (sourceLocal <= clip.inMs + MIN_CLIP_MS || sourceLocal >= clip.outMs - MIN_CLIP_MS) return null;
+  return [
+    { ...clip, id: uid("clip"), outMs: sourceLocal },
+    { ...clip, id: uid("clip"), inMs: sourceLocal },
+  ];
+}
+
+function splitAudioClip(clip: EditorClip, playheadMs: number): [EditorClip, EditorClip] | null {
+  const start = audioClipStart(clip);
+  const local = playheadMs - start;
+  if (local <= MIN_CLIP_MS || local >= clipDuration(clip) - MIN_CLIP_MS) return null;
+  const sourceLocal = clip.inMs + local;
+  return [
+    { ...clip, id: uid("clip"), outMs: sourceLocal },
+    { ...clip, id: uid("clip"), inMs: sourceLocal, startMs: playheadMs },
+  ];
 }
 
 function positiveMs(value: number | undefined): number | undefined {

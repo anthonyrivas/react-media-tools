@@ -11,15 +11,21 @@ Puts clip audio controls and a second audio track into `VideoEditor`.
 
 ### Added
 
-- Extra audio track on `VideoEditor`: drop or `addSource` an audio file to place it at the playhead. Drag to slip in time. Overlapping extras mix in preview and export.
+- Extra audio track on `VideoEditor`: drop or `addSource` an audio file to place it at the playhead. Drag to slip in time. Overlapping extras mix in preview and export, and stack onto extra timeline rows so they stay selectable.
 - `EditorClip.kind`, `startMs`, and `linkedClipId`. Omitted `kind` stays magnetic (including `AudioEditor`).
-- **Unlink audio** (U) mutes a video clip and copies its sound onto the extra track for J/L cuts.
+- **Unlink audio** (U) moves a video clip’s soundtrack onto the extra track for J/L cuts. Picture stays silent in preview and export; the sound exists only on that track.
+- **Split all tracks** (Shift+S) cuts picture and extra audio at the playhead. Linked halves stay paired.
 - `VideoEditorHandle.unlinkSelected()`.
 
 ### Changed
 
-- Video clips already had gain, mute, fades, and normalize; export now mixes those envelopes with extra-track audio.
+- Video clips already had gain, mute, fades, and normalize; export now mixes those envelopes with extra-track audio. Mixer controls stay disabled on picture-only clips (unlinked or silent sources).
 - `VideoEditor` Open file / drop accepts audio as well as video. Export still needs at least one picture clip.
+
+### Fixed
+
+- Extra-audio clips were drawn `8px` to the right of the picture track and ruler.
+- Extra-track audio could stay silent in preview because `play()` ran after the click/key gesture.
 
 ## [0.3.0] - 2026-09-21
 

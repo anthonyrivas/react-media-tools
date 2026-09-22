@@ -222,9 +222,9 @@ You can also skip `sources` and call `addSource` on the handle (including from `
 ### Behavior
 
 - Timeline clips are the in/out range of a source. Trim either edge; split at the playhead; drag video clips to reorder. Neighbor cuts and the playhead snap magnetically.
-- Extra audio sits on a second lane. Drag it to slip in time (it is not magnetic). **Unlink audio** (U) mutes a video clip and copies its sound onto that lane so you can make J and L cuts.
+- Extra audio sits under the picture. Drag it to slip in time (it is not magnetic). Overlapping clips stack onto extra rows so they stay selectable, and still mix in preview and export. **Unlink audio** (U) moves a video clip’s soundtrack onto that lane and silences the picture, so you can make J and L cuts. **Split all tracks** (Shift+S) cuts picture and extra audio together at the playhead.
 - Preview plays picture in order and mixes extra audio under it, including overlapping clips. Hover (or focus) the preview for play/pause. Click the ruler or drag the playhead to scrub.
-- Selected clips (video or extra audio) have gain, mute, linear fades, and normalize. Export applies the same envelopes and mixes extra audio into the soundtrack.
+- Selected clips with a soundtrack (linked video, or extra audio) have gain, mute, linear fades, and normalize. Picture-only clips — silent sources, or video after unlink — leave those controls disabled. Export applies the same envelopes and mixes extra audio into the soundtrack.
 - Zoom with `−` / `=` / `0`, the zoom controls, pinch, or ⌘/Ctrl+scroll. Trimming while zoomed keeps the layout still so the handle you grabbed does not jump.
 - Clips with audio get a translucent waveform after ingest (decoded once per source).
 - Export encodes in the browser (MP4 when WebCodecs allows it, otherwise WebM) and calls `onExport`. Progress is shown on the Export button. Export needs at least one video clip.
@@ -237,7 +237,8 @@ Keyboard shortcuts apply only after the editor was last clicked, or while focus 
 | ← / → | Scrub ~1 frame (Shift: 1s) |
 | Home / End | Jump to start / end |
 | ↑ / ↓ | Select previous / next clip |
-| S | Split at the playhead |
+| S | Split the selected clip (audio) or the picture clip at the playhead |
+| Shift+S | Split picture and extra audio at the playhead |
 | M | Mute / unmute the selected clip |
 | U | Unlink the selected video clip’s audio onto the extra track |
 | Delete / Backspace | Remove the selected clip |
@@ -283,11 +284,11 @@ editorRef.current?.download();
 | Method | Description |
 | --- | --- |
 | `addSource(input, name?)` | `EditorInput` or a `Blob`. Probes the file if duration/size are omitted. Audio-only files go on the extra track at the playhead. |
-| `split()` | Cut the selected (or playhead) clip in two. |
+| `split(allTracks?)` | Cut the selected (or playhead) clip in two. Pass `true` to split picture and extra audio at the playhead. |
 | `deleteSelected()` | Remove the selected clip. |
 | `undo()` / `redo()` | Timeline history (trims coalesce while you drag). |
 | `normalizeSelected()` | Set gain from the clip’s sample peak. Unmutes. |
-| `unlinkSelected()` | Mute the selected video clip and copy its sound onto the extra audio track. |
+| `unlinkSelected()` | Move the selected video clip’s soundtrack onto the extra audio track and silence the picture. |
 | `exportVideo()` | Encode and return `ExportResult`, or `null` if there is no picture clip. |
 | `download(filename?)` | Save the last export (runs export first if needed). |
 

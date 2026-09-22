@@ -44,6 +44,16 @@ export function IconSplit() {
   );
 }
 
+export function IconSplitTracks() {
+  return (
+    <IconSvg>
+      <path d="M4 8h16" />
+      <path d="M4 16h16" />
+      <path d="M12 4v16" />
+    </IconSvg>
+  );
+}
+
 export function IconTrash() {
   return (
     <IconSvg>

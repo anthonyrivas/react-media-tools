@@ -29,7 +29,9 @@ import {
   snapValue,
   audioClipStart,
   audioTrackClips,
+  hasDetachedAudio,
   isAudioClip,
+  packAudioLanes,
   timelineDuration,
   videoTrackClips,
 } from "./timelineMath";
@@ -40,6 +42,7 @@ export type TimelineSource = {
   durationMs: number;
   thumb?: string;
   peaks?: WaveformPeaks;
+  hasAudio?: boolean;
 };
 
 export type TimelineHandle = {
@@ -187,6 +190,8 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
 
   const videoClips = useMemo(() => videoTrackClips(clips), [clips]);
   const extraAudio = useMemo(() => audioTrackClips(clips), [clips]);
+  const audioPack = useMemo(() => packAudioLanes(extraAudio), [extraAudio]);
+  const audioRowCount = showAudioTrack ? Math.max(1, audioPack.rowCount) : 0;
   const total = useMemo(() => timelineDuration(clips), [clips]);
 
   const playhead = useMemo(() => locateClip(clips, playheadMs), [clips, playheadMs]);
@@ -574,7 +579,7 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
               <span
                 key={tick.ms}
                 className="rmt-timeline__tick"
-                style={{ left: TRACK_PAD_PX + tick.ms * pps }}
+                style={{ left: tick.ms * pps }}
               >
                 {tick.label}
               </span>
@@ -596,6 +601,7 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
             {videoClips.map((clip, index) => {
               const source = sources[clip.sourceId];
               const duration = Math.max(1, clip.outMs - clip.inMs);
+              const start = clipStartMs(clips, clips.findIndex((item) => item.id === clip.id));
               const thumb = thumbs?.[clip.id] ?? source?.thumb;
               const locked = holdLayout != null;
               const trimming = locked && drag.current?.id === clip.id;
@@ -603,6 +609,8 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
               const fades = clampFades(clip);
               const fadeInPct = (fades.fadeInMs / duration) * 100;
               const fadeOutPct = (fades.fadeOutMs / duration) * 100;
+              const detached = hasDetachedAudio(clips, clip.id);
+              const playableAudio = source?.hasAudio !== false && !detached;
               return (
                 <div
                   key={clip.id}
@@ -615,14 +623,12 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
                     selectedId === clip.id ? "is-selected" : "",
                     dropIndex === index ? "is-drop-target" : "",
                     trimming ? "is-trimming" : "",
-                    clip.muted ? "is-muted" : "",
+                    clip.muted && !detached ? "is-muted" : "",
                   ]
                     .filter(Boolean)
                     .join(" ")}
                   style={{
-                    flexGrow: 0,
-                    flexShrink: 0,
-                    flexBasis: `${width}px`,
+                    left: start * pps,
                     width,
                     minWidth: 36,
                   }}
@@ -688,7 +694,7 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
                   />
                   <div className="rmt-clip__body">
                     {thumb && <img src={thumb} alt="" draggable={false} />}
-                    {source?.peaks && (
+                    {source?.peaks && !clip.muted && playableAudio && (
                       <ClipWaveform peaks={source.peaks} inMs={clip.inMs} outMs={clip.outMs} />
                     )}
                     <span className="rmt-clip__name">{source?.name ?? "Clip"}</span>
@@ -697,7 +703,7 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
                       {formatPrecise(clip.inMs)}–{formatPrecise(clip.outMs)}
                     </span>
                   </div>
-                  {showFades && onFade && (
+                  {showFades && onFade && playableAudio && (
                     <>
                       {fades.fadeInMs > 0 && (
                         <div
@@ -824,9 +830,13 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
               );
             })}
             </div>
-            {showAudioTrack && (
+            {showAudioTrack &&
+              Array.from({ length: audioRowCount }, (_, row) => (
               <div
+                key={`audio-${row}`}
                 className="rmt-timeline__lane rmt-timeline__lane--audio"
+                data-audio-row={row}
+                aria-label={audioRowCount > 1 ? `Audio row ${row + 1}` : "Audio track"}
                 onPointerDown={(event) => {
                   if (event.target === event.currentTarget) beginScrub(event);
                 }}
@@ -834,7 +844,9 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
                 {extraAudio.length === 0 && (
                   <div className="rmt-timeline__lane-empty">Audio track · drop audio or unlink a clip</div>
                 )}
-                {extraAudio.map((clip) => {
+                {extraAudio
+                  .filter((clip) => (audioPack.rowById.get(clip.id) ?? 0) === row)
+                  .map((clip) => {
                   const source = sources[clip.sourceId];
                   const duration = Math.max(1, clip.outMs - clip.inMs);
                   const start = audioClipStart(clip);
@@ -858,7 +870,7 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
                         .filter(Boolean)
                         .join(" ")}
                       style={{
-                        left: TRACK_PAD_PX + start * pps,
+                        left: start * pps,
                         width,
                         minWidth: 36,
                       }}
@@ -1050,7 +1062,7 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
                   );
                 })}
               </div>
-            )}
+              ))}
             {total > 0 && (
               <div
                 className="rmt-timeline__playhead"
@@ -1157,12 +1169,12 @@ function clipElements(track: HTMLDivElement | null): HTMLElement[] {
 }
 
 function timeToX(track: HTMLDivElement | null, clips: EditorClip[], ms: number): number {
-  if (!track || !clips.length) return TRACK_PAD_PX;
+  if (!track || !clips.length) return 0;
   const hit = locateClip(clips, ms);
   const video = videoTrackClips(clips);
   const videoIndex = hit ? video.findIndex((clip) => clip.id === hit.clip.id) : -1;
   const el = videoIndex >= 0 ? clipElements(track)[videoIndex] : null;
-  if (!hit || !el) return TRACK_PAD_PX;
+  if (!hit || !el) return 0;
   const duration = Math.max(1, clipDuration(hit.clip));
   const lane = el.offsetParent instanceof HTMLElement && el.offsetParent !== track ? el.offsetParent : null;
   return (lane?.offsetLeft ?? 0) + el.offsetLeft + (hit.offsetMs / duration) * el.offsetWidth;

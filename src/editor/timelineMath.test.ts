@@ -15,6 +15,9 @@ import {
   timelineDuration,
   totalDuration,
   audioClipsAt,
+  clipHasPlayableAudio,
+  hasDetachedAudio,
+  packAudioLanes,
 } from "./timelineMath";
 
 function clip(id: string, inMs: number, outMs: number, sourceId = "src"): EditorClip {
@@ -70,5 +73,63 @@ describe("timelineMath", () => {
     expect(locateClip(clips, 900)?.clip.id).toBe("v");
     expect(audioClipsAt(clips, 900).map((item) => item.id)).toEqual(["a"]);
     expect(audioClipsAt(clips, 200)).toEqual([]);
+  });
+
+  it("treats unlinked picture audio as detached", () => {
+    const clips: EditorClip[] = [
+      clip("v", 0, 1000),
+      { id: "a", sourceId: "src", inMs: 0, outMs: 1000, kind: "audio", startMs: 0, linkedClipId: "v" },
+    ];
+    expect(hasDetachedAudio(clips, "v")).toBe(true);
+    expect(hasDetachedAudio(clips, "a")).toBe(false);
+    expect(clipHasPlayableAudio(clips, clips[0]!)).toBe(false);
+    expect(clipHasPlayableAudio(clips, clips[1]!)).toBe(true);
+  });
+
+  it("treats silent picture sources as having no mixer audio", () => {
+    const picture = clip("v", 0, 1000);
+    expect(clipHasPlayableAudio([picture], picture, false)).toBe(false);
+    expect(clipHasPlayableAudio([picture], picture, true)).toBe(true);
+  });
+
+  it("stacks overlapping extra-audio clips onto extra rows", () => {
+    const soundtrack: EditorClip = {
+      id: "take",
+      sourceId: "src",
+      inMs: 0,
+      outMs: 6000,
+      kind: "audio",
+      startMs: 0,
+    };
+    const vo1: EditorClip = {
+      id: "vo1",
+      sourceId: "src",
+      inMs: 0,
+      outMs: 1000,
+      kind: "audio",
+      startMs: 500,
+    };
+    const vo2: EditorClip = {
+      id: "vo2",
+      sourceId: "src",
+      inMs: 0,
+      outMs: 1000,
+      kind: "audio",
+      startMs: 1500,
+    };
+    const adjacent: EditorClip = {
+      id: "tail",
+      sourceId: "src",
+      inMs: 0,
+      outMs: 500,
+      kind: "audio",
+      startMs: 6000,
+    };
+    const packed = packAudioLanes([clip("v", 0, 6000), soundtrack, vo1, vo2, adjacent]);
+    expect(packed.rowCount).toBe(2);
+    expect(packed.rowById.get("take")).toBe(0);
+    expect(packed.rowById.get("vo1")).toBe(1);
+    expect(packed.rowById.get("vo2")).toBe(1);
+    expect(packed.rowById.get("tail")).toBe(0);
   });
 });
