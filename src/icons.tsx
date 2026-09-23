@@ -54,6 +54,15 @@ export function IconSplitTracks() {
   );
 }
 
+export function IconDuplicate() {
+  return (
+    <IconSvg>
+      <rect x="8" y="8" width="11" height="11" rx="2" />
+      <path d="M15 8V6.8A1.8 1.8 0 0 0 13.2 5H6.8A1.8 1.8 0 0 0 5 6.8v6.4A1.8 1.8 0 0 0 6.8 15H8" />
+    </IconSvg>
+  );
+}
+
 export function IconTrash() {
   return (
     <IconSvg>

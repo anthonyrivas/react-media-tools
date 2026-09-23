@@ -101,6 +101,27 @@ export function audioClipEnd(clip: EditorClip): number {
   return audioClipStart(clip) + clipDuration(clip);
 }
 
+/** Copy a clip with a new id. Extra-audio copies sit just after the original. */
+export function duplicateClip(clip: EditorClip, id: string): EditorClip {
+  const copy: EditorClip = {
+    id,
+    sourceId: clip.sourceId,
+    inMs: clip.inMs,
+    outMs: clip.outMs,
+    volume: clip.volume,
+    muted: clip.muted,
+    fadeInMs: clip.fadeInMs,
+    fadeOutMs: clip.fadeOutMs,
+  };
+  if (isAudioClip(clip)) {
+    copy.kind = "audio";
+    copy.startMs = audioClipEnd(clip);
+  } else if (clip.kind) {
+    copy.kind = clip.kind;
+  }
+  return copy;
+}
+
 export function totalDuration(clips: EditorClip[]): number {
   return videoTrackClips(clips).reduce((sum, clip) => sum + clipDuration(clip), 0);
 }

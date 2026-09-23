@@ -16,6 +16,7 @@ import {
   totalDuration,
   audioClipsAt,
   clipHasPlayableAudio,
+  duplicateClip,
   hasDetachedAudio,
   packAudioLanes,
 } from "./timelineMath";
@@ -131,5 +132,30 @@ describe("timelineMath", () => {
     expect(packed.rowById.get("vo1")).toBe(1);
     expect(packed.rowById.get("vo2")).toBe(1);
     expect(packed.rowById.get("tail")).toBe(0);
+  });
+
+  it("duplicates a clip without the original unlink pairing", () => {
+    const picture = clip("v", 100, 900);
+    const copy = duplicateClip(picture, "v2");
+    expect(copy).toMatchObject({ id: "v2", sourceId: "src", inMs: 100, outMs: 900 });
+    expect(copy.linkedClipId).toBeUndefined();
+
+    const audio: EditorClip = {
+      id: "a",
+      sourceId: "src",
+      inMs: 0,
+      outMs: 500,
+      kind: "audio",
+      startMs: 200,
+      linkedClipId: "v",
+    };
+    expect(duplicateClip(audio, "a2")).toMatchObject({
+      id: "a2",
+      kind: "audio",
+      startMs: 700,
+      inMs: 0,
+      outMs: 500,
+    });
+    expect(duplicateClip(audio, "a2").linkedClipId).toBeUndefined();
   });
 });
