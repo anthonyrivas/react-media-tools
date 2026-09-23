@@ -26,6 +26,7 @@ import {
   clipStartMs,
   cutTimes,
   locateClip,
+  playheadX,
   snapThresholdMs,
   snapValue,
   audioClipStart,
@@ -416,7 +417,7 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
       setPlayheadLeft(edge * pps);
       return;
     }
-    setPlayheadLeft(timeToX(track, clips, playheadMs));
+    setPlayheadLeft(playheadX(playheadMs, pps));
   }, [clips, playheadMs, pps, innerWidth, holdLayout]);
 
   useLayoutEffect(() => {
@@ -425,7 +426,7 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
     const anchor = pendingAnchor.current;
     if (!scroller || !track || !anchor || holdLayoutRef.current) return;
     pendingAnchor.current = null;
-    scroller.scrollLeft = timeToX(track, clipsRef.current, anchor.ms) - anchor.viewOffset;
+    scroller.scrollLeft = playheadX(anchor.ms, pps) - anchor.viewOffset;
   }, [zoom, innerWidth, pps]);
 
   useLayoutEffect(() => {
@@ -451,8 +452,8 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
     const viewOffset =
       clientX != null ? clientX - viewLeft : playheadLeftRef(scroller) - (scroller?.scrollLeft ?? 0);
     const ms =
-      clientX != null
-        ? (snappedPlayhead(trackRef.current, clipsRef.current, clientX, false) ?? playheadMsRef.current)
+      clientX != null && ppsRef.current > 0
+        ? playheadFromPointer(clientX, clipsRef.current, ppsRef.current, scroller, false)
         : playheadMsRef.current;
     pendingAnchor.current = {
       ms,
@@ -518,7 +519,7 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
       if (Math.abs(dx) > 2) session.moved = true;
 
       if (session.kind === "playhead") {
-        const ms = snappedPlayhead(trackRef.current, clipsRef.current, event.clientX);
+        const ms = playheadFromPointer(event.clientX, clipsRef.current, ppsRef.current, scrollerRef.current);
         if (ms != null) onScrubRef.current(ms);
         return;
       }
@@ -693,10 +694,10 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
         onMoveAudioEndRef.current?.();
       }
       if (session?.kind === "playhead") {
-        const ms = snappedPlayhead(trackRef.current, clipsRef.current, event.clientX);
+        const ms = playheadFromPointer(event.clientX, clipsRef.current, ppsRef.current, scrollerRef.current);
         if (ms != null) onSeekRef.current(ms);
       } else if (session && !session.moved && (session.kind === "move" || session.kind === "audioMove")) {
-        const ms = snappedPlayhead(trackRef.current, clipsRef.current, event.clientX);
+        const ms = playheadFromPointer(event.clientX, clipsRef.current, ppsRef.current, scrollerRef.current);
         if (ms != null) onSeekRef.current(ms);
       }
       drag.current = null;
@@ -734,7 +735,7 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
       moved: false,
       snapPlayheadMs: playheadMs,
     };
-    const ms = snappedPlayhead(trackRef.current, clips, event.clientX);
+    const ms = playheadFromPointer(event.clientX, clips, pps, scrollerRef.current);
     if (ms != null) onScrub(ms);
   };
 
@@ -1357,57 +1358,18 @@ function clipElements(track: HTMLDivElement | null): HTMLElement[] {
   return [...track.querySelectorAll<HTMLElement>(".rmt-clip--video")];
 }
 
-function timeToX(track: HTMLDivElement | null, clips: EditorClip[], ms: number): number {
-  if (!track || !clips.length) return 0;
-  const hit = locateClip(clips, ms);
-  const video = videoTrackClips(clips);
-  const videoIndex = hit ? video.findIndex((clip) => clip.id === hit.clip.id) : -1;
-  const el = videoIndex >= 0 ? clipElements(track)[videoIndex] : null;
-  if (!hit || !el) return 0;
-  const duration = Math.max(1, clipDuration(hit.clip));
-  const lane = el.offsetParent instanceof HTMLElement && el.offsetParent !== track ? el.offsetParent : null;
-  return (lane?.offsetLeft ?? 0) + el.offsetLeft + (hit.offsetMs / duration) * el.offsetWidth;
-}
-
-function timeFromClientX(
-  track: HTMLDivElement | null,
-  clips: EditorClip[],
+function playheadFromPointer(
   clientX: number,
-): number | null {
-  if (!track || !clips.length) return null;
-  const elements = clipElements(track);
-  const video = videoTrackClips(clips);
-  for (let i = 0; i < video.length; i += 1) {
-    const clip = video[i];
-    const el = elements[i];
-    if (!clip || !el) continue;
-    const rect = el.getBoundingClientRect();
-    const isLast = i === video.length - 1;
-    if (clientX < rect.right || isLast) {
-      const ratio = clamp((clientX - rect.left) / Math.max(rect.width, 1), 0, 1);
-      const start = clipStartMs(
-        clips,
-        clips.findIndex((item) => item.id === clip.id),
-      );
-      return start + ratio * clipDuration(clip);
-    }
-  }
-  return totalFrom(clips);
-}
-
-function snappedPlayhead(
-  track: HTMLDivElement | null,
   clips: EditorClip[],
-  clientX: number,
+  pps: number,
+  scroller: HTMLElement | null,
   snap = true,
-): number | null {
-  const ms = timeFromClientX(track, clips, clientX);
-  if (ms == null) return null;
+): number {
+  const total = timelineDuration(clips);
+  if (total <= 0 || pps <= 0) return 0;
+  const ms = clamp(timelineMsAtX(clientX, innerOriginLeft(scroller), TRACK_PAD_PX, pps), 0, total);
   if (!snap) return ms;
-  const total = totalFrom(clips);
-  const width = track?.getBoundingClientRect().width ?? 1;
-  const threshold = snapThresholdMs(width / Math.max(total, 1));
-  return snapValue(ms, cutTimes(clips), threshold);
+  return snapValue(ms, cutTimes(clips), snapThresholdMs(pps));
 }
 
 function indexFromClientX(

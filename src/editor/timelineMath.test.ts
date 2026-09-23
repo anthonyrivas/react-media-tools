@@ -12,7 +12,9 @@ import {
   clipDuration,
   clipStartMs,
   cutTimes,
+  isPastPicture,
   locateClip,
+  playheadX,
   snapThresholdMs,
   snapValue,
   timelineDuration,
@@ -98,6 +100,9 @@ describe("timelineMath", () => {
     ];
     expect(totalDuration(clips)).toBe(1000);
     expect(timelineDuration(clips)).toBe(1300);
+    expect(isPastPicture(clips, 999)).toBe(false);
+    expect(isPastPicture(clips, 1000)).toBe(true);
+    expect(playheadX(1300, 0.5)).toBe(650);
     expect(locateClip(clips, 900)?.clip.id).toBe("v");
     expect(audioClipsAt(clips, 900).map((item) => item.id)).toEqual(["a"]);
     expect(audioClipsAt(clips, 200)).toEqual([]);

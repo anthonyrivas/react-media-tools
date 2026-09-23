@@ -52,6 +52,7 @@ import {
   duplicateClip,
   hasDetachedAudio,
   isAudioClip,
+  isPastPicture,
   isVideoClip,
   locateClip,
   timelineDuration,
@@ -128,6 +129,8 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
     const [selectedId, setSelectedId] = useState<string | null>(null);
     const [playheadMs, setPlayheadMs] = useState(0);
     const [playing, setPlaying] = useState(false);
+    const [blankPicture, setBlankPicture] = useState(false);
+    const blankPictureRef = useRef(false);
     const [busy, setBusy] = useState(false);
     const [progress, setProgress] = useState<number | null>(null);
     const [error, setError] = useState<string | null>(null);
@@ -529,6 +532,8 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
         const gen = (syncGenRef.current += 1);
         seekingRef.current = true;
         clipIndexRef.current = index;
+        blankPictureRef.current = false;
+        setBlankPicture(false);
         const local = clamp(offsetMs, 0, clipDuration(clip));
         const target = (clip.inMs + local) / 1000;
 
@@ -560,25 +565,41 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
       [applyLiveGain, connectGraph],
     );
 
+    const showBlankFrame = useCallback(() => {
+      videoRef.current?.pause();
+      applyLiveGain(null, 0);
+      if (blankPictureRef.current) return;
+      syncGenRef.current += 1;
+      seekingRef.current = false;
+      blankPictureRef.current = true;
+      setBlankPicture(true);
+    }, [applyLiveGain]);
+
     const syncToPlayhead = useCallback(
       async (ms: number, autoplay: boolean) => {
         syncExtraAudio(ms, autoplay);
+        if (isPastPicture(clipsRef.current, ms)) {
+          showBlankFrame();
+          return;
+        }
         const hit = locateClip(clipsRef.current, ms);
         if (!hit) {
-          videoRef.current?.pause();
+          showBlankFrame();
           return;
         }
         await showClip(hit.index, hit.offsetMs, autoplay);
       },
-      [showClip, syncExtraAudio],
+      [showBlankFrame, showClip, syncExtraAudio],
     );
 
     const seek = useCallback(
       (ms: number) => {
         const next = setPlayhead(ms);
         const hit = locateClip(clipsRef.current, next);
-        if (hit) clipIndexRef.current = hit.index;
-        if (hit) applyLiveGain(hit.clip, hit.offsetMs);
+        if (hit && !isPastPicture(clipsRef.current, next)) {
+          clipIndexRef.current = hit.index;
+          applyLiveGain(hit.clip, hit.offsetMs);
+        }
         void syncToPlayhead(next, playingRef.current);
         return next;
       },
@@ -594,6 +615,8 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
           video.load();
         }
         loadedSourceIdRef.current = null;
+        blankPictureRef.current = false;
+        setBlankPicture(false);
         if (playheadRef.current !== 0) setPlayhead(0);
         return;
       }
@@ -629,10 +652,9 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
         if (!nextClip) {
           const picture = totalDuration(clipsNow);
           const timeline = timelineDuration(clipsNow);
-          video.pause();
-          applyLiveGain(null, 0);
+          showBlankFrame();
           if (picture < timeline && playheadRef.current < timeline - 30) {
-            setPlayhead(Math.max(playheadRef.current, picture));
+            if (playheadRef.current < picture) setPlayhead(picture);
             syncExtraAudio(playheadRef.current, true);
             return;
           }
@@ -670,11 +692,10 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
         if (!seekingRef.current) {
           const clipsNow = clipsRef.current;
           const timeline = timelineDuration(clipsNow);
-          const picture = totalDuration(clipsNow);
           const index = clipIndexRef.current;
           const clip = clipsNow[index];
           const inPicture =
-            clip && isVideoClip(clip) && playheadRef.current < picture && picture > 0;
+            clip && isVideoClip(clip) && !isPastPicture(clipsNow, playheadRef.current);
 
           if (inPicture && clip) {
             const sourceTime = video.currentTime * 1000;
@@ -689,8 +710,7 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
               keepPlaying();
             }
           } else {
-            video.pause();
-            applyLiveGain(null, 0);
+            showBlankFrame();
             const next = Math.min(timeline, playheadRef.current + dt);
             setPlayhead(next);
             syncExtraAudio(next, true);
@@ -713,7 +733,9 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
       void audioCtxRef.current?.resume();
       syncExtraAudio(playheadRef.current, true);
 
-      const hit = locateClip(clipsRef.current, playheadRef.current);
+      const pastPicture = isPastPicture(clipsRef.current, playheadRef.current);
+      if (pastPicture) showBlankFrame();
+      const hit = pastPicture ? null : locateClip(clipsRef.current, playheadRef.current);
       void (hit ? showClip(hit.index, hit.offsetMs, true) : Promise.resolve()).then(() => {
         if (!active) return;
         syncExtraAudio(playheadRef.current, true);
@@ -725,7 +747,7 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
         cancelAnimationFrame(raf);
         video.removeEventListener("ended", onEnded);
       };
-    }, [applyLiveGain, playing, setPlayhead, showClip, syncExtraAudio]);
+    }, [applyLiveGain, playing, setPlayhead, showBlankFrame, showClip, syncExtraAudio]);
 
     const togglePlay = useCallback(() => {
       if (!clipsRef.current.length) return;
@@ -888,11 +910,14 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
         playingRef.current = false;
         setPlaying(false);
         const next = setPlayhead(ms);
+        const pastPicture = isPastPicture(clipsRef.current, next);
         const hit = locateClip(clipsRef.current, next);
-        if (hit) {
+        if (hit && !pastPicture) {
           clipIndexRef.current = hit.index;
           setSelectedId(hit.clip.id);
           applyLiveGain(hit.clip, hit.offsetMs);
+        } else if (pastPicture) {
+          applyLiveGain(null, 0);
         }
         pendingScrub.current = next;
         if (scrubRaf.current) return;
@@ -943,6 +968,7 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
         const next = seek(ms);
         const selected = clipsRef.current.find((clip) => clip.id === selectedIdRef.current);
         if (selected && isAudioClip(selected)) return;
+        if (isPastPicture(clipsRef.current, next)) return;
         const hit = locateClip(clipsRef.current, next);
         if (hit) setSelectedId(hit.clip.id);
       },
@@ -1446,10 +1472,11 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
           </button>
         </div>
 
-        <div
+          <div
           className={[
             "rmt-editor__preview",
             clips.length ? (playing ? "is-playing" : "is-paused") : "",
+            blankPicture ? "is-blank" : "",
           ]
             .filter(Boolean)
             .join(" ")}

@@ -273,6 +273,43 @@ describe("VideoEditor", () => {
     expect(screen.getByRole("group", { name: /VO/ })).toHaveClass("rmt-clip--audio");
   });
 
+  it("lets extra audio past picture extend the playhead range", async () => {
+    vi.mocked(probeMedia)
+      .mockResolvedValueOnce({
+        durationMs: 2000,
+        width: 640,
+        height: 360,
+        hasAudio: true,
+        hasVideo: true,
+      })
+      .mockResolvedValueOnce({
+        durationMs: 3500,
+        width: 0,
+        height: 0,
+        hasAudio: true,
+        hasVideo: false,
+      });
+    const ref = createRef<VideoEditorHandle>();
+    render(<VideoEditor ref={ref} />);
+
+    await ref.current?.addSource({
+      file: new Blob(["video"]),
+      name: "Take 1",
+      durationMs: 2000,
+      width: 640,
+      height: 360,
+    });
+    await waitFor(() => expect(screen.getByText("Take 1")).toBeInTheDocument());
+    await ref.current?.addSource({
+      file: new Blob(["audio"], { type: "audio/webm" }),
+      name: "VO",
+      durationMs: 3500,
+    });
+    await waitFor(() => expect(screen.getByText("VO")).toBeInTheDocument());
+    expect(screen.getByText("00:00.00 / 00:03.50")).toBeInTheDocument();
+    expect(screen.getByRole("slider", { name: "Playhead" })).toHaveAttribute("aria-valuemax", "3500");
+  });
+
   it("stacks overlapping extra-audio clips onto extra rows", async () => {
     vi.mocked(probeMedia)
       .mockResolvedValueOnce({

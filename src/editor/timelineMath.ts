@@ -158,6 +158,16 @@ export function timelineDuration(clips: EditorClip[]): number {
   return Math.max(picture, audioEnd);
 }
 
+/** True when the playhead is at or after the last picture frame (extra audio may still run). */
+export function isPastPicture(clips: EditorClip[], ms: number): boolean {
+  return ms >= totalDuration(clips);
+}
+
+/** Playhead offset on the padded inner track (`left` of a clip at the same time). */
+export function playheadX(ms: number, pps: number): number {
+  return Math.max(0, ms) * pps;
+}
+
 export function audioClipsAt(clips: EditorClip[], ms: number): EditorClip[] {
   return audioTrackClips(clips).filter((clip) => {
     const start = audioClipStart(clip);

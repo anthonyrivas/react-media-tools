@@ -331,6 +331,10 @@
   background: var(--rmt-stage-bg);
 }
 
+.rmt-editor__preview.is-blank .rmt-editor__video {
+  visibility: hidden;
+}
+
 .rmt-overlay-host {
   position: absolute;
   inset: 0;
