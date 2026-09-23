@@ -100,6 +100,7 @@ Built-in Download and Open file controls are **off** by default. Use the callbac
 ### Behavior
 
 - Turn on **Camera**, **Screen**, or both. With both, the webcam is a rounded picture-in-picture on the screen share. Drag the pip to move it; drag a corner to resize. With the pip focused, arrow keys move it and Shift+arrow resizes.
+- After **Start**, you can switch to the tab or window you are sharing. The webcam pip keeps compositing in the background (Chromium).
 - **Microphone** is on by default (`defaultMicrophone`). **System audio** is Chromium desktop only, and only when the user shares a tab/window that includes audio.
 - **Start** begins the take. **Pause** / **Resume** keep the same file. You can mute, unmute, add, or remove sources while recording.
 - Output size follows the webcam when that is the only video source, and the screen when screen share is active. Dimensions **lock at Start** so the file does not change size mid-take.
@@ -221,7 +222,7 @@ You can also skip `sources` and call `addSource` on the handle (including from `
 
 ### Behavior
 
-- Timeline clips are the in/out range of a source. Trim either edge; split at the playhead; drag video clips to reorder. Neighbor cuts and the playhead snap magnetically.
+- Timeline clips are the in/out range of a source. Trim either edge; split at the playhead; **Duplicate** (D) copies the selected clip (picture goes after it in the sequence; extra audio sits just after it in time); drag video clips to reorder. Neighbor cuts and the playhead snap magnetically.
 - Extra audio sits under the picture. Drag it to slip in time (it is not magnetic). Overlapping clips stack onto extra rows so they stay selectable, and still mix in preview and export. **Unlink audio** (U) moves a video clip’s soundtrack onto that lane and silences the picture, so you can make J and L cuts. **Split all tracks** (Shift+S) cuts picture and extra audio together at the playhead.
 - Preview plays picture in order and mixes extra audio under it, including overlapping clips. Hover (or focus) the preview for play/pause. Click the ruler or drag the playhead to scrub.
 - Selected clips with a soundtrack (linked video, or extra audio) have gain, mute, linear fades, and normalize. Picture-only clips — silent sources, or video after unlink — leave those controls disabled. Export applies the same envelopes and mixes extra audio into the soundtrack.
@@ -239,6 +240,7 @@ Keyboard shortcuts apply only after the editor was last clicked, or while focus 
 | ↑ / ↓ | Select previous / next clip |
 | S | Split the selected clip (audio) or the picture clip at the playhead |
 | Shift+S | Split picture and extra audio at the playhead |
+| D | Duplicate the selected clip |
 | M | Mute / unmute the selected clip |
 | U | Unlink the selected video clip’s audio onto the extra track |
 | Delete / Backspace | Remove the selected clip |
@@ -272,6 +274,7 @@ const editorRef = useRef<VideoEditorHandle>(null);
 
 await editorRef.current?.addSource(blob, "Take 1");
 editorRef.current?.split();
+editorRef.current?.duplicateSelected();
 editorRef.current?.deleteSelected();
 editorRef.current?.undo();
 editorRef.current?.redo();
@@ -285,6 +288,7 @@ editorRef.current?.download();
 | --- | --- |
 | `addSource(input, name?)` | `EditorInput` or a `Blob`. Probes the file if duration/size are omitted. Audio-only files go on the extra track at the playhead. |
 | `split(allTracks?)` | Cut the selected (or playhead) clip in two. Pass `true` to split picture and extra audio at the playhead. |
+| `duplicateSelected()` | Copy the selected clip. Picture copies follow it on the magnetic track; extra audio copies start when the original ends. |
 | `deleteSelected()` | Remove the selected clip. |
 | `undo()` / `redo()` | Timeline history (trims coalesce while you drag). |
 | `normalizeSelected()` | Set gain from the clip’s sample peak. Unmutes. |
@@ -309,12 +313,12 @@ Ingest from `AudioRecorder` with `addSource`, drop an audio file, or use Open fi
 
 ### Behavior
 
-- Timeline, trim, split, reorder, undo/redo, and zoom match `VideoEditor`’s picture track (clips stay magnetic; there is no extra audio lane). Drag the inner handles on a clip to set linear fade in / fade out (each fade is capped at half the clip).
+- Timeline, trim, split, duplicate, reorder, undo/redo, and zoom match `VideoEditor`’s picture track (clips stay magnetic; there is no extra audio lane). Drag the inner handles on a clip to set linear fade in / fade out (each fade is capped at half the clip).
 - The stage is a waveform of the clip under the playhead, not a video well. Hover (or focus) for play/pause. Preview applies the selected clip’s gain, mute, and fades through the Web Audio API.
 - Selected-clip mixer: **Mute** (M), **Gain** (0–200%), and **Normalize** (one-shot; sets gain so the clip peaks near −1 dBFS, up to 200%).
 - Export encodes audio only (M4A when WebCodecs allows AAC, otherwise WebM) and calls `onExport`. `ExportResult.width` / `height` are `0`.
 
-Keyboard shortcuts match `VideoEditor` except **U** (unlink is video-only). **M** mutes the selected clip.
+Keyboard shortcuts match `VideoEditor` except **U** (unlink is video-only). **M** mutes the selected clip. **D** duplicates it.
 
 ### Props
 
@@ -338,6 +342,7 @@ const editorRef = useRef<AudioEditorHandle>(null);
 
 await editorRef.current?.addSource(blob, "Take 1");
 editorRef.current?.split();
+editorRef.current?.duplicateSelected();
 editorRef.current?.deleteSelected();
 editorRef.current?.undo();
 editorRef.current?.redo();
@@ -350,6 +355,7 @@ editorRef.current?.download();
 | --- | --- |
 | `addSource(input, name?)` | `EditorInput` or a `Blob`. Probes the file if duration is omitted. |
 | `split()` | Cut the selected (or playhead) clip in two. Fades stay on the outer edges. |
+| `duplicateSelected()` | Copy the selected clip and insert it after the original. |
 | `deleteSelected()` | Remove the selected clip. |
 | `undo()` / `redo()` | Timeline history (trims, fades, and gain drags coalesce while you drag). |
 | `normalizeSelected()` | Set gain from the clip’s sample peak. Unmutes. |
@@ -422,7 +428,7 @@ npm install
 npm run dev
 ```
 
-The demo at the repo root is a Vite app (`demo/`) with the video recorder, audio recorder, editor, and a Dark / Light toggle (`data-theme` on `<html>`). See [docs/development.md](docs/development.md) for the library build and tests.
+The demo at the repo root is a Vite app (`demo/`) with the video recorder, audio recorder, both editors, Download / Open file controls, and a Dark / Light toggle (`data-theme` on `<html>`). See [docs/development.md](docs/development.md) for the library build and tests.
 
 ```bash
 npm test

@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Duplicate** (D) copies the selected clip in `VideoEditor` and `AudioEditor`. Picture copies follow the original on the magnetic track; extra-audio copies start when the original ends.
+- Demo app shows Download on the recorders and editors (`showDownload`).
+
+### Fixed
+
+- Camera overlay could freeze after screen capture started because the webcam `<video>` was not in the document. Source videos stay mounted (and playing) so the pip keeps moving.
+- Camera overlay froze when switching to the shared tab: background tabs pause `requestAnimationFrame`. Compositing now follows live camera/screen tracks so frames keep arriving while the recorder is hidden.
+
 ## [0.4.0] - 2026-09-21
 
 Puts clip audio controls and a second audio track into `VideoEditor`.
