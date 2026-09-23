@@ -38,6 +38,7 @@ Puts clip audio controls and a second audio track into `VideoEditor`.
 - Camera overlay could freeze after screen capture started because the webcam `<video>` was not in the document. Source videos stay mounted (and playing) so the pip keeps moving.
 - Camera overlay froze when switching to the shared tab: background tabs pause `requestAnimationFrame`. Compositing now follows live camera/screen tracks so frames keep arriving while the recorder is hidden.
 - Playhead stopped at the last picture clip when extra audio ran longer. It now follows the full timeline; preview shows a blank frame in that tail (export already padded with black).
+- Stopping a recording released the camera but left screen capture running. Stop now ends the display-media stream too.
 
 ## [0.3.0] - 2026-09-21
 

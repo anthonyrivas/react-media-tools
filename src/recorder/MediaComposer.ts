@@ -291,6 +291,7 @@ export class MediaComposer {
       this.stopBackgroundClock();
       this.stopTick();
       if (this.camera) await this.setCamera(false);
+      if (this.screen) await this.setScreen(false);
       this.status = this.camera || this.screen ? "preview" : "idle";
       this.updateCanvasSize();
       this.emit();

@@ -104,7 +104,7 @@ Built-in Download and Open file controls are **off** by default. Use the callbac
 - **Microphone** is on by default (`defaultMicrophone`). **System audio** is Chromium desktop only, and only when the user shares a tab/window that includes audio.
 - **Start** begins the take. **Pause** / **Resume** keep the same file. You can mute, unmute, add, or remove sources while recording.
 - Output size follows the webcam when that is the only video source, and the screen when screen share is active. Dimensions **lock at Start** so the file does not change size mid-take.
-- **Stop** finishes the `Blob`, fires `onRecordingStop`, and releases the camera. Use `result.blob` or call `download()` on the handle.
+- **Stop** finishes the `Blob`, fires `onRecordingStop`, and releases the camera and screen share. Use `result.blob` or call `download()` on the handle.
 - Unavailable modes (system audio on Safari/Firefox, screen share on iOS) stay disabled with a short explanation in the UI.
 
 Takes with no audio track use a video-only MIME type so the file stays playable in the editor.

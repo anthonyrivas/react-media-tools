@@ -42,4 +42,50 @@ describe("MediaComposer", () => {
     expect(stage.querySelectorAll("video")).toHaveLength(0);
     stage.remove();
   });
+
+  it("releases screen capture when recording stops", async () => {
+    const composer = new MediaComposer(canvas());
+    const stopTrack = vi.fn();
+    const inner = composer as unknown as {
+      recorder: {
+        state: string;
+        mimeType: string;
+        addEventListener: (type: string, fn: EventListener) => void;
+        removeEventListener: () => void;
+        stop: () => void;
+      } | null;
+      screenStream: MediaStream | null;
+      chunks: Blob[];
+    };
+    const listeners = new Set<EventListener>();
+    inner.recorder = {
+      state: "recording",
+      mimeType: "video/webm",
+      addEventListener(type, fn) {
+        if (type === "stop") listeners.add(fn);
+      },
+      removeEventListener() {
+        listeners.clear();
+      },
+      stop() {
+        this.state = "inactive";
+        listeners.forEach((fn) => fn(new Event("stop")));
+      },
+    };
+    inner.chunks = [new Blob(["take"])];
+    inner.screenStream = {
+      getTracks: () => [{ stop: stopTrack, readyState: "live" }],
+      getVideoTracks: () => [{ stop: stopTrack, readyState: "live", addEventListener: vi.fn() }],
+      getAudioTracks: () => [],
+    } as unknown as MediaStream;
+    composer.screen = true;
+    composer.status = "recording";
+
+    await composer.stopRecording();
+
+    expect(stopTrack).toHaveBeenCalled();
+    expect(composer.screen).toBe(false);
+    expect(composer.status).toBe("idle");
+    composer.destroy();
+  });
 });
