@@ -716,7 +716,19 @@
 }
 
 .rmt-clip.is-trimming {
+  z-index: 4;
+  overflow: visible;
   cursor: ew-resize;
+}
+
+.rmt-clip__trim-away {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 1;
+  pointer-events: none;
+  background: var(--rmt-bg);
+  opacity: 0.5;
 }
 
 .rmt-clip.is-muted {
@@ -725,6 +737,11 @@
 
 .rmt-clip.is-drop-target {
   box-shadow: inset 3px 0 0 var(--rmt-accent);
+}
+
+.rmt-clip.is-trim-snap {
+  z-index: 2;
+  box-shadow: 0 0 0 2px var(--rmt-accent);
 }
 
 .rmt-clip__body {

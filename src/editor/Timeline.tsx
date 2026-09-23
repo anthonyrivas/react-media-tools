@@ -18,6 +18,7 @@ import {
   MAX_ZOOM,
   MIN_CLIP_MS,
   MIN_ZOOM,
+  FIT_ZOOM,
   TRACK_PAD_PX,
   clamp,
   clampZoom,
@@ -29,10 +30,16 @@ import {
   snapValue,
   audioClipStart,
   audioTrackClips,
+  canSnapTrimToHovered,
   hasDetachedAudio,
+  hoveredTrimSourceTimes,
+  hoveredTrimUsesBothEdges,
   isAudioClip,
   packAudioLanes,
   timelineDuration,
+  timelineInnerWidth,
+  timelineMsAtX,
+  timelinePps,
   videoTrackClips,
 } from "./timelineMath";
 
@@ -85,6 +92,7 @@ type DragSession = {
   width: number;
   moved: boolean;
   snapPlayheadMs: number;
+  grabOffsetMs?: number;
 };
 
 type HoldLayout = {
@@ -92,7 +100,11 @@ type HoldLayout = {
   total: number;
   innerWidth: number;
   scrollLeft: number;
+  originLeft: number;
   widths: Record<string, number>;
+  lefts: Record<string, number>;
+  starts: Record<string, number>;
+  durations: Record<string, number>;
 };
 
 type TrimTip = {
@@ -114,6 +126,84 @@ type ZoomAnchor = {
   ms: number;
   viewOffset: number;
 };
+
+function innerOriginLeft(scroller: HTMLElement | null): number {
+  const inner = scroller?.querySelector<HTMLElement>(".rmt-timeline__inner");
+  return (inner ?? scroller)?.getBoundingClientRect().left ?? 0;
+}
+
+function heldClipBox(
+  hold: HoldLayout | null,
+  id: string,
+  liveStart: number,
+  liveDuration: number,
+  pps: number,
+): { left: number; width: number } {
+  return {
+    left: hold?.lefts[id] ?? liveStart * pps,
+    width: hold?.widths[id] ?? Math.max(36, liveDuration * pps),
+  };
+}
+
+function draggingHandleLeft(
+  session: DragSession | null,
+  clip: EditorClip,
+  edge: "in" | "out",
+  pps: number,
+): number | null {
+  if (!session || session.id !== clip.id || session.kind !== edge) return null;
+  if (edge === "in") return (clip.inMs - session.originIn) * pps;
+  return (clip.outMs - session.originIn) * pps - 24;
+}
+
+function hoveredTrimHandle(
+  x: number,
+  y: number,
+  trimmingId: string,
+  clips: EditorClip[],
+  showAudioTrack: boolean,
+): { clip: EditorClip; edge: "in" | "out" } | null {
+  const stack = document.elementsFromPoint(x, y);
+  for (const node of stack) {
+    if (!(node instanceof Element)) continue;
+    const handle = node.closest(".rmt-clip__trim");
+    if (!handle) continue;
+    const host = handle.closest("[data-clip-id]");
+    const id = host?.getAttribute("data-clip-id");
+    if (!id || id === trimmingId) continue;
+    const hovered = clips.find((item) => item.id === id);
+    const trimming = clips.find((item) => item.id === trimmingId);
+    if (!hovered || !trimming) return null;
+    if (!canSnapTrimToHovered(trimming, hovered, showAudioTrack)) return null;
+    const edge = handle.getAttribute("data-trim-edge") === "in" || handle.classList.contains("rmt-clip__trim--in")
+      ? "in"
+      : "out";
+    return { clip: hovered, edge };
+  }
+  return null;
+}
+
+function hoveredTrimClip(
+  x: number,
+  y: number,
+  trimmingId: string,
+  clips: EditorClip[],
+  showAudioTrack: boolean,
+): EditorClip | null {
+  const stack = document.elementsFromPoint(x, y);
+  for (const node of stack) {
+    if (!(node instanceof Element)) continue;
+    const host = node.closest("[data-clip-id]");
+    const id = host?.getAttribute("data-clip-id");
+    if (!id || id === trimmingId) continue;
+    const hovered = clips.find((item) => item.id === id);
+    const trimming = clips.find((item) => item.id === trimmingId);
+    if (!hovered || !trimming) return null;
+    if (!canSnapTrimToHovered(trimming, hovered, showAudioTrack)) return null;
+    return hovered;
+  }
+  return null;
+}
 
 export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timeline(
   {
@@ -170,6 +260,10 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
   const [viewWidth, setViewWidth] = useState(0);
   const [trimTip, setTrimTip] = useState<TrimTip | null>(null);
   const [fadeTip, setFadeTip] = useState<FadeTip | null>(null);
+  const [snapTrimId, setSnapTrimId] = useState<string | null>(null);
+  const showAudioTrackRef = useRef(showAudioTrack);
+  const setSnapTrimIdRef = useRef<(id: string | null) => void>(() => undefined);
+  const audioLanesRef = useRef<Map<string, number>>(new Map());
 
   clipsRef.current = clips;
   sourcesRef.current = sources;
@@ -185,53 +279,114 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
   zoomRef.current = zoom;
   playheadMsRef.current = playheadMs;
   holdLayoutRef.current = holdLayout;
+  showAudioTrackRef.current = showAudioTrack;
   setTrimTipRef.current = setTrimTip;
   setFadeTipRef.current = setFadeTip;
+  setSnapTrimIdRef.current = setSnapTrimId;
 
   const videoClips = useMemo(() => videoTrackClips(clips), [clips]);
   const extraAudio = useMemo(() => audioTrackClips(clips), [clips]);
-  const audioPack = useMemo(() => packAudioLanes(extraAudio), [extraAudio]);
+  const audioPack = useMemo(() => {
+    const packed = packAudioLanes(extraAudio, audioLanesRef.current);
+    audioLanesRef.current = packed.rowById;
+    return packed;
+  }, [extraAudio]);
   const audioRowCount = showAudioTrack ? Math.max(1, audioPack.rowCount) : 0;
   const total = useMemo(() => timelineDuration(clips), [clips]);
 
   const playhead = useMemo(() => locateClip(clips, playheadMs), [clips, playheadMs]);
 
-  const livePps = useMemo(() => {
-    const usable = Math.max(1, viewWidth - TRACK_PAD_PX * 2);
-    return total > 0 ? (usable / total) * zoom : 0;
-  }, [total, viewWidth, zoom]);
+  const livePps = useMemo(
+    () => timelinePps(viewWidth, total, zoom),
+    [total, viewWidth, zoom],
+  );
 
   const pps = holdLayout?.pps ?? livePps;
   ppsRef.current = pps;
 
-  const liveInnerWidth = useMemo(() => {
-    if (!clips.length || livePps <= 0) return viewWidth;
-    return Math.max(viewWidth, TRACK_PAD_PX * 2 + total * livePps);
-  }, [clips.length, livePps, total, viewWidth]);
+  const liveInnerWidth = useMemo(
+    () => timelineInnerWidth(viewWidth, total, livePps),
+    [livePps, total, viewWidth],
+  );
 
   const innerWidth = holdLayout?.innerWidth ?? liveInnerWidth;
   const layoutTotal = holdLayout?.total ?? total;
 
-  const captureHoldLayout = useCallback((): HoldLayout => {
+  const captureHoldLayout = useCallback((originLeft?: number): HoldLayout => {
     const scroller = scrollerRef.current;
-    const track = trackRef.current;
+    const clipsNow = clipsRef.current;
+    const ppsNow = ppsRef.current;
+    const starts: Record<string, number> = {};
+    const lefts: Record<string, number> = {};
     const widths: Record<string, number> = {};
-    if (track) {
-      clipElements(track).forEach((el, i) => {
-        const clip = videoTrackClips(clipsRef.current)[i];
-        if (clip) widths[clip.id] = el.getBoundingClientRect().width;
-      });
-    }
+    const durations: Record<string, number> = {};
+    clipsNow.forEach((item, index) => {
+      const start = clipStartMs(clipsNow, index);
+      const duration = clipDuration(item);
+      starts[item.id] = start;
+      durations[item.id] = duration;
+      lefts[item.id] = start * ppsNow;
+      widths[item.id] = Math.max(36, duration * ppsNow);
+    });
     const inner = scroller?.querySelector<HTMLElement>(".rmt-timeline__inner");
-    const totalNow = totalFrom(clipsRef.current);
+    const totalNow = totalFrom(clipsNow);
     return {
-      pps: ppsRef.current,
+      pps: ppsNow,
       total: totalNow,
-      innerWidth: inner?.offsetWidth || Math.max(viewWidth, TRACK_PAD_PX * 2 + totalNow * ppsRef.current),
+      innerWidth: inner?.offsetWidth || Math.max(viewWidth, TRACK_PAD_PX * 2 + totalNow * ppsNow),
       scrollLeft: scroller?.scrollLeft ?? 0,
+      originLeft: originLeft ?? innerOriginLeft(scroller),
+      starts,
+      lefts,
       widths,
+      durations,
     };
   }, [viewWidth]);
+
+  const beginTrim = (
+    event: React.PointerEvent,
+    kind: "in" | "out",
+    clip: EditorClip,
+    index: number,
+    start: number,
+    duration: number,
+    fades: { fadeInMs: number; fadeOutMs: number },
+  ) => {
+    event.preventDefault();
+    event.stopPropagation();
+    onSelect(clip.id);
+    const ppsNow = ppsRef.current;
+    const originLeft = innerOriginLeft(scrollerRef.current);
+    const originEdge = kind === "in" ? start : start + duration;
+    const host = event.currentTarget.parentElement;
+    drag.current = {
+      kind,
+      id: clip.id,
+      index,
+      startX: event.clientX,
+      originIn: clip.inMs,
+      originOut: clip.outMs,
+      originFadeIn: fades.fadeInMs,
+      originFadeOut: fades.fadeOutMs,
+      originStart: start,
+      duration,
+      width: host?.getBoundingClientRect().width ?? 1,
+      moved: false,
+      snapPlayheadMs: playheadMs,
+      grabOffsetMs: timelineMsAtX(event.clientX, originLeft, TRACK_PAD_PX, ppsNow) - originEdge,
+    };
+    skipFollow.current = true;
+    const held = captureHoldLayout(originLeft);
+    holdLayoutRef.current = held;
+    setHoldLayout(held);
+    setTrimTip({
+      edge: kind,
+      inMs: clip.inMs,
+      outMs: clip.outMs,
+      x: event.clientX,
+      y: event.clientY,
+    });
+  };
 
   useLayoutEffect(() => {
     const scroller = scrollerRef.current;
@@ -249,8 +404,20 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
       setPlayheadLeft(0);
       return;
     }
+    const session = drag.current;
+    const hold = holdLayoutRef.current;
+    if (hold && session && (session.kind === "in" || session.kind === "out")) {
+      const clip = clips.find((item) => item.id === session.id);
+      const start = hold.starts[session.id] ?? session.originStart;
+      const edge =
+        !clip || session.kind === "in"
+          ? start + ((clip?.inMs ?? session.originIn) - session.originIn)
+          : start + ((clip?.outMs ?? session.originOut) - session.originIn);
+      setPlayheadLeft(edge * pps);
+      return;
+    }
     setPlayheadLeft(timeToX(track, clips, playheadMs));
-  }, [clips, playheadMs, pps, innerWidth]);
+  }, [clips, playheadMs, pps, innerWidth, holdLayout]);
 
   useLayoutEffect(() => {
     const scroller = scrollerRef.current;
@@ -266,7 +433,7 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
       skipFollow.current = false;
       return;
     }
-    if (holdLayout != null || drag.current || zoom <= 1) return;
+    if (holdLayout != null || drag.current || zoom <= FIT_ZOOM) return;
     const scroller = scrollerRef.current;
     if (!scroller) return;
     const left = scroller.scrollLeft;
@@ -297,17 +464,17 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
   }, []);
 
   const zoomFit = useCallback(() => {
-    if (zoomRef.current === MIN_ZOOM) return;
+    if (zoomRef.current === FIT_ZOOM) return;
     pendingAnchor.current = { ms: playheadMsRef.current, viewOffset: (scrollerRef.current?.clientWidth ?? 0) / 2 };
     skipFollow.current = true;
-    zoomRef.current = MIN_ZOOM;
-    setZoom(MIN_ZOOM);
+    zoomRef.current = FIT_ZOOM;
+    setZoom(FIT_ZOOM);
   }, []);
 
   useImperativeHandle(ref, () => ({ zoomBy: applyZoom, zoomFit }), [applyZoom, zoomFit]);
 
   useEffect(() => {
-    if (!clips.length && zoomRef.current !== MIN_ZOOM) setZoom(MIN_ZOOM);
+    if (!clips.length && zoomRef.current !== FIT_ZOOM) setZoom(FIT_ZOOM);
   }, [clips.length]);
 
   useEffect(() => {
@@ -331,7 +498,7 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
         applyZoom(event.deltaY < 0 ? 1.15 : 1 / 1.15, event.clientX);
         return;
       }
-      if (zoomRef.current <= 1) return;
+      if (zoomRef.current <= FIT_ZOOM) return;
       if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
       event.preventDefault();
       scroller.scrollLeft += event.deltaY;
@@ -367,7 +534,7 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
         return;
       }
 
-      const ppsNow = session.duration > 0 ? session.width / session.duration : 0;
+      const ppsNow = ppsRef.current > 0 ? ppsRef.current : session.duration > 0 ? session.width / session.duration : 0;
       const deltaMs = ppsNow > 0 ? dx / ppsNow : 0;
 
       if (session.kind === "audioMove") {
@@ -404,18 +571,60 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
       if (!clip || !source) return;
       const track = isAudioClip(clip) ? audioTrackClips(clipsRef.current) : videoTrackClips(clipsRef.current);
       const trackIndex = track.findIndex((item) => item.id === clip.id);
-      const clipIndex = clipsRef.current.findIndex((item) => item.id === clip.id);
-      const start = clipStartMs(clipsRef.current, clipIndex);
+      const hold = holdLayoutRef.current;
+      const start = session.originStart;
+      const originLeft = hold?.originLeft ?? innerOriginLeft(scrollerRef.current);
+      const cursorMs =
+        timelineMsAtX(event.clientX, originLeft, TRACK_PAD_PX, ppsNow) - (session.grabOffsetMs ?? 0);
+      const proposedSource = session.originIn + (cursorMs - start);
       const sourceAtPlayhead = session.originIn + (session.snapPlayheadMs - start);
+      const frozenStart = (id: string) => {
+        if (hold?.starts[id] != null) return hold.starts[id]!;
+        const index = clipsRef.current.findIndex((item) => item.id === id);
+        return clipStartMs(clipsRef.current, index);
+      };
+      const frozenEnd = (item: EditorClip) =>
+        frozenStart(item.id) + (hold?.durations[item.id] ?? clipDuration(item));
+      const hoveredHandle = hoveredTrimHandle(
+        event.clientX,
+        event.clientY,
+        session.id,
+        clipsRef.current,
+        showAudioTrackRef.current,
+      );
+      const hovered =
+        hoveredHandle?.clip ??
+        hoveredTrimClip(
+          event.clientX,
+          event.clientY,
+          session.id,
+          clipsRef.current,
+          showAudioTrackRef.current,
+        );
+      setSnapTrimIdRef.current(hovered?.id ?? null);
+      let hoverTargets: number[] = [];
+      if (hoveredHandle && (session.kind === "in" || session.kind === "out")) {
+        const hoveredTime = hoveredHandle.edge === "in" ? frozenStart(hoveredHandle.clip.id) : frozenEnd(hoveredHandle.clip);
+        hoverTargets.push(session.originIn + (hoveredTime - start));
+      } else if (hovered && (session.kind === "in" || session.kind === "out")) {
+        hoverTargets = hoveredTrimSourceTimes({
+          edge: session.kind,
+          originIn: session.originIn,
+          clipStartMs: start,
+          hoveredStartMs: frozenStart(hovered.id),
+          hoveredEndMs: frozenEnd(hovered),
+          bothEdges: hoveredTrimUsesBothEdges(clip, hovered),
+        });
+      }
       if (session.kind === "in") {
-        const targets = [0];
+        const targets = [0, ...hoverTargets];
         if (sourceAtPlayhead > 0 && sourceAtPlayhead < session.originOut - MIN_CLIP_MS) {
           targets.push(sourceAtPlayhead);
         }
         const prev = track[trackIndex - 1];
         if (prev && prev.sourceId === clip.sourceId) targets.push(prev.outMs);
         const nextIn = clamp(
-          snapValue(session.originIn + deltaMs, targets, threshold),
+          snapValue(proposedSource, targets, threshold),
           0,
           session.originOut - MIN_CLIP_MS,
         );
@@ -428,14 +637,14 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
           y: event.clientY,
         });
       } else {
-        const targets = [source.durationMs];
+        const targets = [source.durationMs, ...hoverTargets];
         if (sourceAtPlayhead > session.originIn + MIN_CLIP_MS) {
           targets.push(sourceAtPlayhead);
         }
         const nextClip = track[trackIndex + 1];
         if (nextClip && nextClip.sourceId === clip.sourceId) targets.push(nextClip.inMs);
         const nextOut = clamp(
-          snapValue(session.originOut + deltaMs, targets, threshold),
+          snapValue(proposedSource, targets, threshold),
           session.originIn + MIN_CLIP_MS,
           source.durationMs,
         );
@@ -473,6 +682,7 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
         skipFollow.current = true;
         setHoldLayout(null);
         setTrimTip(null);
+        setSnapTrimId(null);
         onTrimEndRef.current();
       }
       if (session?.kind === "fadeIn" || session?.kind === "fadeOut") {
@@ -536,7 +746,7 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
         <div className="rmt-timeline__hint">
           {total <= 0
             ? emptyHint
-            : `${Math.max(1, Math.round(total / 1000))}s · ←/→ scrub · pinch or ${modKey()}+scroll to zoom`}
+            : `${Math.max(1, Math.round(layoutTotal / 1000))}s · ←/→ scrub · pinch or ${modKey()}+scroll to zoom`}
         </div>
         <div className="rmt-timeline__zoom" role="group" aria-label="Timeline zoom">
           <IconButton
@@ -563,7 +773,7 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
           <button
             type="button"
             className="rmt-btn"
-            disabled={zoom <= MIN_ZOOM || !clips.length}
+            disabled={zoom === FIT_ZOOM || !clips.length}
             aria-keyshortcuts="Digit0"
             onClick={zoomFit}
             title="Fit timeline (0)"
@@ -605,15 +815,24 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
               const thumb = thumbs?.[clip.id] ?? source?.thumb;
               const locked = holdLayout != null;
               const trimming = locked && drag.current?.id === clip.id;
+              const draggingTrim =
+                trimming && (drag.current?.kind === "in" || drag.current?.kind === "out");
+              const left = holdLayout?.lefts[clip.id] ?? start * pps;
               const width = holdLayout?.widths[clip.id] ?? Math.max(36, duration * pps);
+              const originIn = drag.current?.originIn ?? clip.inMs;
+              const inHandleLeft = draggingTrim && drag.current?.kind === "in" ? (clip.inMs - originIn) * pps : null;
+              const outHandleLeft =
+                draggingTrim && drag.current?.kind === "out" ? (clip.outMs - originIn) * pps - 24 : null;
+              const displayDuration = holdLayout?.durations[clip.id] ?? duration;
               const fades = clampFades(clip);
-              const fadeInPct = (fades.fadeInMs / duration) * 100;
-              const fadeOutPct = (fades.fadeOutMs / duration) * 100;
+              const fadeInPct = (fades.fadeInMs / displayDuration) * 100;
+              const fadeOutPct = (fades.fadeOutMs / displayDuration) * 100;
               const detached = hasDetachedAudio(clips, clip.id);
               const playableAudio = source?.hasAudio !== false && !detached;
               return (
                 <div
                   key={clip.id}
+                  data-clip-id={clip.id}
                   role="group"
                   aria-label={`${source?.name ?? "Clip"}, ${formatLength(clip.outMs - clip.inMs)}`}
                   aria-current={selectedId === clip.id ? "true" : undefined}
@@ -623,12 +842,13 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
                     selectedId === clip.id ? "is-selected" : "",
                     dropIndex === index ? "is-drop-target" : "",
                     trimming ? "is-trimming" : "",
+                    snapTrimId === clip.id ? "is-trim-snap" : "",
                     clip.muted && !detached ? "is-muted" : "",
                   ]
                     .filter(Boolean)
                     .join(" ")}
                   style={{
-                    left: start * pps,
+                    left,
                     width,
                     minWidth: 36,
                   }}
@@ -657,48 +877,44 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
                 >
                   <button
                     type="button"
-                    className="rmt-clip__trim rmt-clip__trim--in"
+                    className={["rmt-clip__trim", "rmt-clip__trim--in", inHandleLeft != null ? "is-dragging" : ""]
+                      .filter(Boolean)
+                      .join(" ")}
+                    data-trim-edge="in"
                     tabIndex={-1}
                     aria-label="Trim start"
+                    style={
+                      inHandleLeft != null
+                        ? { position: "absolute", top: 0, bottom: 0, left: inHandleLeft }
+                        : undefined
+                    }
                     onPointerDown={(event) => {
-                      event.preventDefault();
-                      event.stopPropagation();
-                      onSelect(clip.id);
-                      const host = event.currentTarget.parentElement;
-                      const hostWidth = host?.getBoundingClientRect().width ?? 1;
-                      drag.current = {
-                        kind: "in",
-                        id: clip.id,
-                        index,
-                        startX: event.clientX,
-                        originIn: clip.inMs,
-                        originOut: clip.outMs,
-                        originFadeIn: fades.fadeInMs,
-                        originFadeOut: fades.fadeOutMs,
-                      originStart: 0,
-                        duration,
-                        width: hostWidth,
-                        moved: false,
-                        snapPlayheadMs: playheadMs,
-                      };
-                      skipFollow.current = true;
-                      setHoldLayout(captureHoldLayout());
-                      setTrimTip({
-                        edge: "in",
-                        inMs: clip.inMs,
-                        outMs: clip.outMs,
-                        x: event.clientX,
-                        y: event.clientY,
-                      });
+                      beginTrim(event, "in", clip, index, start, duration, fades);
                     }}
                   />
+                  {draggingTrim && drag.current?.kind === "in" && (
+                    <div
+                      className="rmt-clip__trim-away"
+                      style={{ left: 0, width: Math.max(0, (clip.inMs - originIn) * pps) }}
+                    />
+                  )}
+                  {draggingTrim && drag.current?.kind === "out" && (
+                    <div
+                      className="rmt-clip__trim-away"
+                      style={{ left: Math.max(0, (clip.outMs - originIn) * pps), right: 0 }}
+                    />
+                  )}
                   <div className="rmt-clip__body">
                     {thumb && <img src={thumb} alt="" draggable={false} />}
                     {source?.peaks && !clip.muted && playableAudio && (
-                      <ClipWaveform peaks={source.peaks} inMs={clip.inMs} outMs={clip.outMs} />
+                      <ClipWaveform
+                        peaks={source.peaks}
+                        inMs={draggingTrim ? originIn : clip.inMs}
+                        outMs={draggingTrim ? (drag.current?.originOut ?? clip.outMs) : clip.outMs}
+                      />
                     )}
                     <span className="rmt-clip__name">{source?.name ?? "Clip"}</span>
-                    <span className="rmt-clip__length">{formatLength(clip.outMs - clip.inMs)}</span>
+                    <span className="rmt-clip__length">{formatLength(displayDuration)}</span>
                     <span className="rmt-clip__range">
                       {formatPrecise(clip.inMs)}–{formatPrecise(clip.outMs)}
                     </span>
@@ -791,39 +1007,19 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
                   )}
                   <button
                     type="button"
-                    className="rmt-clip__trim rmt-clip__trim--out"
+                    className={["rmt-clip__trim", "rmt-clip__trim--out", outHandleLeft != null ? "is-dragging" : ""]
+                      .filter(Boolean)
+                      .join(" ")}
+                    data-trim-edge="out"
                     tabIndex={-1}
                     aria-label="Trim end"
+                    style={
+                      outHandleLeft != null
+                        ? { position: "absolute", top: 0, bottom: 0, left: outHandleLeft }
+                        : undefined
+                    }
                     onPointerDown={(event) => {
-                      event.preventDefault();
-                      event.stopPropagation();
-                      onSelect(clip.id);
-                      const host = event.currentTarget.parentElement;
-                      const hostWidth = host?.getBoundingClientRect().width ?? 1;
-                      drag.current = {
-                        kind: "out",
-                        id: clip.id,
-                        index,
-                        startX: event.clientX,
-                        originIn: clip.inMs,
-                        originOut: clip.outMs,
-                        originFadeIn: fades.fadeInMs,
-                        originFadeOut: fades.fadeOutMs,
-                      originStart: 0,
-                        duration,
-                        width: hostWidth,
-                        moved: false,
-                        snapPlayheadMs: playheadMs,
-                      };
-                      skipFollow.current = true;
-                      setHoldLayout(captureHoldLayout());
-                      setTrimTip({
-                        edge: "out",
-                        inMs: clip.inMs,
-                        outMs: clip.outMs,
-                        x: event.clientX,
-                        y: event.clientY,
-                      });
+                      beginTrim(event, "out", clip, index, start, duration, fades);
                     }}
                   />
                 </div>
@@ -850,7 +1046,13 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
                   const source = sources[clip.sourceId];
                   const duration = Math.max(1, clip.outMs - clip.inMs);
                   const start = audioClipStart(clip);
-                  const width = Math.max(36, duration * pps);
+                  const draggingTrim =
+                    drag.current?.id === clip.id &&
+                    (drag.current?.kind === "in" || drag.current?.kind === "out");
+                  const { left, width } = heldClipBox(holdLayout, clip.id, start, duration, pps);
+                  const inHandleLeft = draggingHandleLeft(drag.current, clip, "in", pps);
+                  const outHandleLeft = draggingHandleLeft(drag.current, clip, "out", pps);
+                  const originIn = drag.current?.originIn ?? clip.inMs;
                   const fades = clampFades(clip);
                   const fadeInPct = (fades.fadeInMs / duration) * 100;
                   const fadeOutPct = (fades.fadeOutMs / duration) * 100;
@@ -858,6 +1060,7 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
                   return (
                     <div
                       key={clip.id}
+                      data-clip-id={clip.id}
                       role="group"
                       aria-label={`${source?.name ?? "Audio"}, ${formatLength(duration)}`}
                       aria-current={selectedId === clip.id ? "true" : undefined}
@@ -865,12 +1068,14 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
                         "rmt-clip",
                         "rmt-clip--audio",
                         selectedId === clip.id ? "is-selected" : "",
+                        snapTrimId === clip.id ? "is-trim-snap" : "",
+                        draggingTrim ? "is-trimming" : "",
                         clip.muted ? "is-muted" : "",
                       ]
                         .filter(Boolean)
                         .join(" ")}
                       style={{
-                        left: start * pps,
+                        left,
                         width,
                         minWidth: 36,
                       }}
@@ -899,44 +1104,45 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
                     >
                       <button
                         type="button"
-                        className="rmt-clip__trim rmt-clip__trim--in"
+                        className={["rmt-clip__trim", "rmt-clip__trim--in", inHandleLeft != null ? "is-dragging" : ""]
+                          .filter(Boolean)
+                          .join(" ")}
+                        data-trim-edge="in"
                         tabIndex={-1}
                         aria-label="Trim start"
+                        style={
+                          inHandleLeft != null
+                            ? { position: "absolute", top: 0, bottom: 0, left: inHandleLeft }
+                            : undefined
+                        }
                         onPointerDown={(event) => {
-                          event.preventDefault();
-                          event.stopPropagation();
-                          onSelect(clip.id);
-                          const host = event.currentTarget.parentElement;
-                          drag.current = {
-                            kind: "in",
-                            id: clip.id,
-                            index,
-                            startX: event.clientX,
-                            originIn: clip.inMs,
-                            originOut: clip.outMs,
-                            originFadeIn: fades.fadeInMs,
-                            originFadeOut: fades.fadeOutMs,
-                            originStart: start,
-                            duration,
-                            width: host?.getBoundingClientRect().width ?? 1,
-                            moved: false,
-                            snapPlayheadMs: playheadMs,
-                          };
-                          setTrimTip({
-                            edge: "in",
-                            inMs: clip.inMs,
-                            outMs: clip.outMs,
-                            x: event.clientX,
-                            y: event.clientY,
-                          });
+                          beginTrim(event, "in", clip, index, start, duration, fades);
                         }}
                       />
+                      {draggingTrim && drag.current?.kind === "in" && (
+                        <div
+                          className="rmt-clip__trim-away"
+                          style={{ left: 0, width: Math.max(0, (clip.inMs - originIn) * pps) }}
+                        />
+                      )}
+                      {draggingTrim && drag.current?.kind === "out" && (
+                        <div
+                          className="rmt-clip__trim-away"
+                          style={{ left: Math.max(0, (clip.outMs - originIn) * pps), right: 0 }}
+                        />
+                      )}
                       <div className="rmt-clip__body">
                         {source?.peaks && (
-                          <ClipWaveform peaks={source.peaks} inMs={clip.inMs} outMs={clip.outMs} />
+                          <ClipWaveform
+                            peaks={source.peaks}
+                            inMs={draggingTrim ? originIn : clip.inMs}
+                            outMs={draggingTrim ? (drag.current?.originOut ?? clip.outMs) : clip.outMs}
+                          />
                         )}
                         <span className="rmt-clip__name">{source?.name ?? "Audio"}</span>
-                        <span className="rmt-clip__length">{formatLength(duration)}</span>
+                        <span className="rmt-clip__length">
+                          {formatLength(holdLayout?.durations[clip.id] ?? duration)}
+                        </span>
                       </div>
                       {showFades && onFade && (
                         <>
@@ -1026,36 +1232,19 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
                       )}
                       <button
                         type="button"
-                        className="rmt-clip__trim rmt-clip__trim--out"
+                        className={["rmt-clip__trim", "rmt-clip__trim--out", outHandleLeft != null ? "is-dragging" : ""]
+                          .filter(Boolean)
+                          .join(" ")}
+                        data-trim-edge="out"
                         tabIndex={-1}
                         aria-label="Trim end"
+                        style={
+                          outHandleLeft != null
+                            ? { position: "absolute", top: 0, bottom: 0, left: outHandleLeft }
+                            : undefined
+                        }
                         onPointerDown={(event) => {
-                          event.preventDefault();
-                          event.stopPropagation();
-                          onSelect(clip.id);
-                          const host = event.currentTarget.parentElement;
-                          drag.current = {
-                            kind: "out",
-                            id: clip.id,
-                            index,
-                            startX: event.clientX,
-                            originIn: clip.inMs,
-                            originOut: clip.outMs,
-                            originFadeIn: fades.fadeInMs,
-                            originFadeOut: fades.fadeOutMs,
-                            originStart: start,
-                            duration,
-                            width: host?.getBoundingClientRect().width ?? 1,
-                            moved: false,
-                            snapPlayheadMs: playheadMs,
-                          };
-                          setTrimTip({
-                            edge: "out",
-                            inMs: clip.inMs,
-                            outMs: clip.outMs,
-                            x: event.clientX,
-                            y: event.clientY,
-                          });
+                          beginTrim(event, "out", clip, index, start, duration, fades);
                         }}
                       />
                     </div>
