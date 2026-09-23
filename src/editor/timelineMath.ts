@@ -1,15 +1,28 @@
 import type { EditorClip } from "../types";
 
 export const MIN_CLIP_MS = 120;
-export const MIN_ZOOM = 1;
+export const MIN_ZOOM = 0.5;
+export const FIT_ZOOM = 1;
 export const MAX_ZOOM = 24;
 export const CLIP_GAP_PX = 4;
 export const TRACK_PAD_PX = 8;
+export const END_PAD_PX = 50;
 export const FRAME_MS = 1000 / 30;
 export const SKIP_MS = 1000;
 
 export function clampZoom(value: number): number {
-  return clamp(value, MIN_ZOOM, MAX_ZOOM);
+  return clamp(Math.round(value * 10) / 10, MIN_ZOOM, MAX_ZOOM);
+}
+
+/** Pixels per ms so 1× leaves `END_PAD_PX` after the last clip. */
+export function timelinePps(viewWidth: number, totalMs: number, zoom: number): number {
+  const usable = Math.max(1, viewWidth - TRACK_PAD_PX * 2 - END_PAD_PX);
+  return totalMs > 0 ? (usable / totalMs) * zoom : 0;
+}
+
+export function timelineInnerWidth(viewWidth: number, totalMs: number, pps: number): number {
+  if (totalMs <= 0 || pps <= 0) return viewWidth;
+  return Math.max(viewWidth, TRACK_PAD_PX * 2 + totalMs * pps + END_PAD_PX);
 }
 
 export type ClipHit = {
@@ -45,36 +58,49 @@ export type AudioLanePack = {
 };
 
 /**
- * Pack extra-audio clips onto the fewest rows so overlapping ranges do not share a line.
- * Adjacent half-open clips (`[a, b)` then `[b, c)`) stay on the same row.
+ * Pack extra-audio clips onto rows so overlapping ranges do not share a line.
+ * Adjacent half-open clips (`[a, b)` then `[b, c)`) can share a row.
+ * Row order follows clip insertion, not duration, and `previous` keeps a clip
+ * on its last row so trims do not reshuffle lanes.
  */
-export function packAudioLanes(clips: EditorClip[]): AudioLanePack {
+export function packAudioLanes(
+  clips: EditorClip[],
+  previous?: ReadonlyMap<string, number>,
+): AudioLanePack {
   const audio = audioTrackClips(clips);
   if (audio.length === 0) return { rowById: new Map(), rowCount: 0 };
 
-  const ordered = [...audio].sort((a, b) => {
-    const start = audioClipStart(a) - audioClipStart(b);
-    if (start !== 0) return start;
-    const longer = clipDuration(b) - clipDuration(a);
-    if (longer !== 0) return longer;
-    return a.id.localeCompare(b.id);
-  });
-
-  const laneEnds: number[] = [];
   const rowById = new Map<string, number>();
-  for (const clip of ordered) {
+
+  const overlapsOnRow = (row: number, clip: EditorClip): boolean => {
     const start = audioClipStart(clip);
     const end = audioClipEnd(clip);
-    let row = laneEnds.findIndex((laneEnd) => laneEnd <= start);
-    if (row < 0) {
-      row = laneEnds.length;
-      laneEnds.push(end);
-    } else {
-      laneEnds[row] = end;
+    for (const other of audio) {
+      if (other.id === clip.id || rowById.get(other.id) !== row) continue;
+      if (start < audioClipEnd(other) && audioClipStart(other) < end) return true;
     }
+    return false;
+  };
+
+  const firstFit = (clip: EditorClip): number => {
+    let row = 0;
+    while (overlapsOnRow(row, clip)) row += 1;
+    return row;
+  };
+
+  for (const clip of audio) {
+    const preferred = previous?.get(clip.id);
+    const row = preferred != null && !overlapsOnRow(preferred, clip) ? preferred : firstFit(clip);
     rowById.set(clip.id, row);
   }
-  return { rowById, rowCount: laneEnds.length };
+
+  const used = [...new Set(rowById.values())].sort((a, b) => a - b);
+  const remap = new Map(used.map((row, index) => [row, index]));
+  for (const [id, row] of rowById) {
+    rowById.set(id, remap.get(row) ?? row);
+  }
+
+  return { rowById, rowCount: used.length };
 }
 
 /** Picture clips whose soundtrack was moved onto the extra track. */
@@ -203,8 +229,16 @@ export function cutTimes(clips: EditorClip[]): number[] {
   return times;
 }
 
+export const SNAP_PX = 10;
+
 export function snapThresholdMs(pxPerMs: number): number {
-  return clamp(10 / Math.max(pxPerMs, 0.001), 40, 220);
+  return SNAP_PX / Math.max(pxPerMs, 0.001);
+}
+
+/** Timeline time under a pointer, using the padded inner track. */
+export function timelineMsAtX(clientX: number, originLeft: number, padPx: number, pps: number): number {
+  if (pps <= 0) return 0;
+  return Math.max(0, (clientX - originLeft - padPx) / pps);
 }
 
 export function snapValue(ms: number, targets: number[], thresholdMs: number): number {
@@ -218,6 +252,66 @@ export function snapValue(ms: number, targets: number[], thresholdMs: number): n
     }
   }
   return nearest;
+}
+
+/** Extra-audio and cross-track pairs keep alignment; magnetic same-track clips slide after trim. */
+export function canSnapTrimToHovered(
+  trimming: EditorClip,
+  hovered: EditorClip,
+  showAudioTrack: boolean,
+): boolean {
+  if (trimming.id === hovered.id) return false;
+  if (!showAudioTrack) return false;
+  if (isVideoClip(trimming) && isVideoClip(hovered)) return false;
+  return true;
+}
+
+/** Side-by-side extra audio should snap to the shared edge, not only the far matching edge. */
+export function hoveredTrimUsesBothEdges(trimming: EditorClip, hovered: EditorClip): boolean {
+  return isAudioClip(trimming) && isAudioClip(hovered);
+}
+
+/** Source-time snap points for a hovered clip. Extra-audio pairs include start and end. */
+export function hoveredTrimSourceTimes(input: {
+  edge: "in" | "out";
+  originIn: number;
+  clipStartMs: number;
+  hoveredStartMs: number;
+  hoveredEndMs: number;
+  bothEdges?: boolean;
+}): number[] {
+  const { edge, originIn, clipStartMs: start, hoveredStartMs, hoveredEndMs, bothEdges = false } = input;
+  const times = bothEdges
+    ? [hoveredStartMs, hoveredEndMs]
+    : [edge === "in" ? hoveredStartMs : hoveredEndMs];
+  return times.map((time) => originIn + (time - start));
+}
+
+export function clampTrimIn(nextIn: number, originOut: number): number {
+  return clamp(nextIn, 0, originOut - MIN_CLIP_MS);
+}
+
+export function clampTrimOut(nextOut: number, originIn: number, sourceDurationMs: number): number {
+  return clamp(nextOut, originIn + MIN_CLIP_MS, sourceDurationMs);
+}
+
+/** Map a timeline time onto the dragging clip’s in or out, then clamp. */
+export function trimToTimelineMs(input: {
+  edge: "in" | "out";
+  originIn: number;
+  originOut: number;
+  clipStartMs: number;
+  sourceDurationMs: number;
+  timelineMs: number;
+}): { inMs: number; outMs: number } {
+  const sourceTime = input.originIn + (input.timelineMs - input.clipStartMs);
+  if (input.edge === "in") {
+    return { inMs: clampTrimIn(sourceTime, input.originOut), outMs: input.originOut };
+  }
+  return {
+    inMs: input.originIn,
+    outMs: clampTrimOut(sourceTime, input.originIn, input.sourceDurationMs),
+  };
 }
 
 export function clamp(value: number, min: number, max: number): number {
