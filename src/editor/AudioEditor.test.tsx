@@ -131,4 +131,27 @@ describe("AudioEditor", () => {
       expect(screen.getAllByText("Take 1")).toHaveLength(2);
     });
   });
+
+  it("duplicates the selected clip after the original", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const ref = createRef<AudioEditorHandle>();
+    render(<AudioEditor ref={ref} onChange={onChange} />);
+
+    await ref.current?.addSource({
+      file: new Blob(["audio"], { type: "audio/webm" }),
+      name: "Take 1",
+      durationMs: 2000,
+    });
+    await waitFor(() => expect(screen.getByText("Take 1")).toBeInTheDocument());
+    await user.click(screen.getByRole("button", { name: "Duplicate" }));
+
+    await waitFor(() => {
+      const clips = onChange.mock.calls.at(-1)?.[0] as Array<{ id: string; inMs: number; outMs: number }>;
+      expect(clips).toHaveLength(2);
+      expect(clips[0]?.id).not.toBe(clips[1]?.id);
+      expect(clips[0]?.outMs).toBe(clips[1]?.outMs);
+    });
+    expect(screen.getAllByText("Take 1")).toHaveLength(2);
+  });
 });

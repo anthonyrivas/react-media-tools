@@ -242,6 +242,14 @@
   opacity: 1;
 }
 
+.rmt-recorder__source-video {
+  position: absolute;
+  width: 2px;
+  height: 2px;
+  opacity: 0.01;
+  pointer-events: none;
+}
+
 .rmt-recorder__stage,
 .rmt-editor__preview {
   position: relative;
@@ -302,8 +310,13 @@
   accent-color: var(--rmt-accent);
 }
 
+.rmt-editor__gain input[type="range"]:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 .rmt-editor__gain-value {
-  min-width: 3.4em;
+  min-width: 4.6em;
   font-family: var(--rmt-mono);
   font-variant-numeric: tabular-nums;
   color: var(--rmt-fg);
@@ -316,6 +329,10 @@
   height: 100%;
   object-fit: contain;
   background: var(--rmt-stage-bg);
+}
+
+.rmt-editor__preview.is-blank .rmt-editor__video {
+  visibility: hidden;
 }
 
 .rmt-overlay-host {
@@ -603,7 +620,9 @@
 }
 
 .rmt-timeline__inner {
+  box-sizing: border-box;
   min-width: 100%;
+  padding: 0 8px;
 }
 
 .rmt-timeline__ruler {
@@ -632,16 +651,49 @@
 .rmt-timeline__track {
   position: relative;
   display: flex;
+  flex-direction: column;
+  gap: 4px;
   min-height: 72px;
   min-width: 100%;
-  padding: 8px;
+  padding: 8px 0;
   overflow: hidden;
   user-select: none;
   touch-action: none;
 }
 
-.rmt-clip {
+.rmt-timeline__lane--video,
+.rmt-timeline__lane--audio {
   position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  min-width: 100%;
+}
+
+.rmt-timeline__lane--video {
+  min-height: 72px;
+}
+
+.rmt-timeline__lane--audio {
+  min-height: 56px;
+  border-top: 1px dashed var(--rmt-border);
+}
+
+.rmt-timeline__lane-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  align-items: center;
+  padding: 0 10px;
+  color: var(--rmt-fg-muted);
+  font-size: 11px;
+  font-weight: 600;
+  pointer-events: none;
+}
+
+.rmt-clip {
+  position: absolute;
+  top: 0;
+  bottom: 0;
   display: flex;
   min-width: 36px;
   margin-right: 0;
@@ -652,17 +704,35 @@
   cursor: grab;
 }
 
+.rmt-clip--audio {
+  top: 6px;
+  bottom: 6px;
+}
+
 .rmt-clip:last-child {
   margin-right: 0;
 }
 
 .rmt-clip.is-selected {
+  z-index: 2;
   background: var(--rmt-clip-selected);
   box-shadow: 0 0 0 2px var(--rmt-accent);
 }
 
 .rmt-clip.is-trimming {
+  z-index: 4;
+  overflow: visible;
   cursor: ew-resize;
+}
+
+.rmt-clip__trim-away {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 1;
+  pointer-events: none;
+  background: var(--rmt-bg);
+  opacity: 0.5;
 }
 
 .rmt-clip.is-muted {
@@ -671,6 +741,11 @@
 
 .rmt-clip.is-drop-target {
   box-shadow: inset 3px 0 0 var(--rmt-accent);
+}
+
+.rmt-clip.is-trim-snap {
+  z-index: 2;
+  box-shadow: 0 0 0 2px var(--rmt-accent);
 }
 
 .rmt-clip__body {

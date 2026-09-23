@@ -11,30 +11,66 @@ import type { EditorClip, EditorInput, ExportResult } from "../types";
 import { downloadBlob, formatPrecise, uid } from "../utils";
 import { exportTimeline } from "./exportTimeline";
 import { cloneSnapshot, createHistory, sameClips, type EditorSnapshot } from "./history";
-import { extractThumbnail, probeMedia } from "./probe";
+import { extractThumbnail, looksLikeAudioFile, probeMedia } from "./probe";
 import { Timeline, type TimelineHandle, type TimelineSource } from "./Timeline";
 import { IconButton } from "../IconButton";
-import { IconDownload, IconOpen, IconPause, IconPlay, IconRedo, IconSplit, IconTrash, IconUndo } from "../icons";
+import {
+  IconDownload,
+  IconMute,
+  IconOpen,
+  IconPause,
+  IconPlay,
+  IconRedo,
+  IconSpeaker,
+  IconSplit,
+  IconSplitTracks,
+  IconTrash,
+  IconUndo,
+  IconUnlink,
+  IconDuplicate,
+} from "../icons";
 import { extractPeaks } from "./waveform";
+import {
+  MAX_GAIN,
+  envelopeAt,
+  normalizedVolume,
+  withClampedAudio,
+} from "./audioGain";
+import { measureClipPeak } from "./exportAudio";
 import {
   FRAME_MS,
   MIN_CLIP_MS,
   SKIP_MS,
+  audioClipEnd,
+  audioClipStart,
+  audioClipsAt,
+  audioTrackClips,
   clamp,
   clipDuration,
+  clipHasPlayableAudio,
   clipStartMs,
+  duplicateClip,
+  hasDetachedAudio,
+  isAudioClip,
+  isPastPicture,
+  isVideoClip,
   locateClip,
+  timelineDuration,
   totalDuration,
+  videoTrackClips,
 } from "./timelineMath";
 
 export type VideoEditorHandle = {
   addSource: (input: EditorInput | Blob, name?: string) => Promise<void>;
-  split: () => void;
+  split: (allTracks?: boolean) => void;
+  duplicateSelected: () => void;
   deleteSelected: () => void;
   undo: () => void;
   redo: () => void;
   exportVideo: () => Promise<ExportResult | null>;
   download: (filename?: string) => void;
+  normalizeSelected: () => Promise<void>;
+  unlinkSelected: () => void;
 };
 
 export type VideoEditorProps = {
@@ -59,6 +95,7 @@ type LoadedSource = TimelineSource & {
   url: string;
   width: number;
   height: number;
+  hasAudio: boolean;
 };
 
 export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
@@ -92,6 +129,8 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
     const [selectedId, setSelectedId] = useState<string | null>(null);
     const [playheadMs, setPlayheadMs] = useState(0);
     const [playing, setPlaying] = useState(false);
+    const [blankPicture, setBlankPicture] = useState(false);
+    const blankPictureRef = useRef(false);
     const [busy, setBusy] = useState(false);
     const [progress, setProgress] = useState<number | null>(null);
     const [error, setError] = useState<string | null>(null);
@@ -110,9 +149,18 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
     const editorActiveRef = useRef(false);
     const historyRef = useRef(createHistory());
     const trimBeforeRef = useRef<EditorSnapshot | null>(null);
+    const fadeBeforeRef = useRef<EditorSnapshot | null>(null);
+    const gainBeforeRef = useRef<EditorSnapshot | null>(null);
     const applyingHistoryRef = useRef(false);
     const [canUndo, setCanUndo] = useState(false);
     const [canRedo, setCanRedo] = useState(false);
+    const audioCtxRef = useRef<AudioContext | null>(null);
+    const gainNodeRef = useRef<GainNode | null>(null);
+    const mediaSourceRef = useRef<MediaElementAudioSourceNode | null>(null);
+    const extraAudioEls = useRef(new Map<string, HTMLAudioElement>());
+    const extraGainNodes = useRef(new Map<string, GainNode>());
+    const extraConnected = useRef(new Set<string>());
+    const moveBeforeRef = useRef<EditorSnapshot | null>(null);
 
     clipsRef.current = clips;
     sourcesRef.current = sourceMap;
@@ -120,7 +168,9 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
     thumbsRef.current = clipThumbs;
     selectedIdRef.current = selectedId;
 
-    const totalMs = useMemo(() => totalDuration(clips), [clips]);
+    const totalMs = useMemo(() => timelineDuration(clips), [clips]);
+    const extraAudio = useMemo(() => audioTrackClips(clips), [clips]);
+    const pictureClips = useMemo(() => videoTrackClips(clips), [clips]);
 
     const report = useCallback(
       (err: unknown) => {
@@ -132,7 +182,7 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
     );
 
     const setPlayhead = useCallback((ms: number) => {
-      const next = clamp(ms, 0, Math.max(0, totalDuration(clipsRef.current)));
+      const next = clamp(ms, 0, Math.max(0, timelineDuration(clipsRef.current)));
       playheadRef.current = next;
       setPlayheadMs(next);
       return next;
@@ -158,6 +208,18 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
       historyRef.current.push(captureState());
       syncHistoryButtons();
     }, [captureState, syncHistoryButtons]);
+
+    const commitCoalesced = useCallback(
+      (beforeRef: React.MutableRefObject<EditorSnapshot | null>) => {
+        const before = beforeRef.current;
+        beforeRef.current = null;
+        if (before && !sameClips(before.clips, clipsRef.current)) {
+          historyRef.current.push(before);
+          syncHistoryButtons();
+        }
+      },
+      [syncHistoryButtons],
+    );
 
     const rememberThumb = useCallback((clipId: string, url?: string) => {
       if (!url) return;
@@ -224,12 +286,12 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
     const appendClip = useCallback(
       (sourceId: string, durationMs: number, file: Blob) => {
         recordHistory();
-        const clip: EditorClip = {
+        const clip = withClampedAudio({
           id: uid("clip"),
           sourceId,
           inMs: 0,
           outMs: durationMs,
-        };
+        });
         const start = totalDuration(clipsRef.current);
         setClips((current) => {
           const next = [...current, clip];
@@ -244,13 +306,35 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
       [captureThumb, onChange, recordHistory, setPlayhead],
     );
 
+    const appendAudioClip = useCallback(
+      (sourceId: string, durationMs: number) => {
+        recordHistory();
+        const clip = withClampedAudio({
+          id: uid("clip"),
+          sourceId,
+          inMs: 0,
+          outMs: durationMs,
+          kind: "audio",
+          startMs: playheadRef.current,
+        });
+        setClips((current) => {
+          const next = [...current, clip];
+          onChange?.(next);
+          return next;
+        });
+        setSelectedId(clip.id);
+      },
+      [onChange, recordHistory],
+    );
+
     const addSource = useCallback(
       async (input: EditorInput | Blob, name?: string) => {
         const item: EditorInput = input instanceof Blob ? { file: input, name } : input;
         const id = item.id ?? sourceIdFor(item.file);
         const existing = sourcesRef.current[id];
         if (existing) {
-          appendClip(existing.id, existing.durationMs, existing.file);
+          if (!existing.width && !existing.height) appendAudioClip(existing.id, existing.durationMs);
+          else appendClip(existing.id, existing.durationMs, existing.file);
           return;
         }
         if (knownIds.current.has(id)) return;
@@ -264,8 +348,13 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
             height: item.height,
           });
           const durationMs = positiveMs(item.durationMs) ?? positiveMs(probed.durationMs) ?? 0;
+          const audioOnly = looksLikeAudioFile(item.file) || !probed.hasVideo;
           if (durationMs <= 0) {
-            throw new Error("Could not read this video. Try another file, or record again.");
+            throw new Error(
+              audioOnly
+                ? "Could not read this audio. Try another file, or record again."
+                : "Could not read this video. Try another file, or record again.",
+            );
           }
           const url = URL.createObjectURL(item.file);
           const loaded: LoadedSource = {
@@ -274,11 +363,13 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
             url,
             name: item.name ?? name ?? `Clip ${Object.keys(sourcesRef.current).length + 1}`,
             durationMs,
-            width: item.width || probed.width || 1280,
-            height: item.height || probed.height || 720,
+            width: audioOnly ? 0 : item.width || probed.width || 1280,
+            height: audioOnly ? 0 : item.height || probed.height || 720,
+            hasAudio: audioOnly || probed.hasAudio,
           };
           setSourceMap((current) => ({ ...current, [id]: loaded }));
-          appendClip(id, durationMs, item.file);
+          if (audioOnly) appendAudioClip(id, durationMs);
+          else appendClip(id, durationMs, item.file);
           void extractPeaks(item.file).then((peaks) => {
             if (!peaks) return;
             setSourceMap((current) => {
@@ -295,7 +386,7 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
           setBusy(false);
         }
       },
-      [appendClip, report],
+      [appendAudioClip, appendClip, report],
     );
 
     useEffect(() => {
@@ -310,29 +401,146 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
         Object.values(thumbsRef.current).forEach((url) => {
           if (url.startsWith("blob:")) URL.revokeObjectURL(url);
         });
+        void audioCtxRef.current?.close().catch(() => undefined);
       };
     }, []);
 
     useEffect(() => {
       if (playing) return;
       videoRef.current?.pause();
+      extraAudioEls.current.forEach((el) => el.pause());
     }, [playing]);
+
+    const connectGraph = useCallback(() => {
+      const video = videoRef.current;
+      if (!video) return;
+      if (audioCtxRef.current?.state === "closed") {
+        audioCtxRef.current = null;
+        mediaSourceRef.current = null;
+        gainNodeRef.current = null;
+        extraConnected.current.clear();
+        extraGainNodes.current.clear();
+      }
+      if (mediaSourceRef.current) {
+        void audioCtxRef.current?.resume();
+        return;
+      }
+      const AudioCtx =
+        window.AudioContext ||
+        (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      if (!AudioCtx) return;
+      try {
+        const ctx = new AudioCtx();
+        const gain = ctx.createGain();
+        const source = ctx.createMediaElementSource(video);
+        source.connect(gain);
+        gain.connect(ctx.destination);
+        audioCtxRef.current = ctx;
+        gainNodeRef.current = gain;
+        mediaSourceRef.current = source;
+        gain.gain.value = 0;
+        void ctx.resume();
+      } catch {
+        mediaSourceRef.current = null;
+      }
+    }, []);
+
+    const applyLiveGain = useCallback((clip: EditorClip | null, localMs: number) => {
+      const detached = clip != null && hasDetachedAudio(clipsRef.current, clip.id);
+      const value = !clip || detached ? 0 : envelopeAt(clip, localMs);
+      const video = videoRef.current;
+      if (video) {
+        video.muted = value <= 0;
+        video.volume = Math.min(1, Math.max(0, value));
+      }
+      if (gainNodeRef.current) gainNodeRef.current.gain.value = value;
+    }, []);
+
+    const connectExtra = useCallback(
+      (id: string, el: HTMLAudioElement) => {
+        connectGraph();
+        const ctx = audioCtxRef.current;
+        if (!ctx || ctx.state === "closed" || extraConnected.current.has(id)) return;
+        try {
+          const gain = ctx.createGain();
+          const source = ctx.createMediaElementSource(el);
+          source.connect(gain);
+          gain.connect(ctx.destination);
+          extraGainNodes.current.set(id, gain);
+          extraConnected.current.add(id);
+          void ctx.resume();
+        } catch {
+          extraGainNodes.current.delete(id);
+        }
+      },
+      [connectGraph],
+    );
+
+    const syncExtraAudio = useCallback(
+      (ms: number, autoplay: boolean) => {
+        const clipsNow = clipsRef.current;
+        extraAudioEls.current.forEach((el, id) => {
+          const clip = clipsNow.find((item) => item.id === id);
+          if (!clip || !isAudioClip(clip)) {
+            el.pause();
+            return;
+          }
+          const source = sourcesRef.current[clip.sourceId];
+          if (!source) {
+            el.pause();
+            return;
+          }
+          connectExtra(id, el);
+          const start = audioClipStart(clip);
+          const end = audioClipEnd(clip);
+          const inRange = ms >= start && ms < end;
+          const local = clamp(ms - start, 0, clipDuration(clip));
+          const gain = inRange ? envelopeAt(clip, local) : 0;
+          const gainNode = extraGainNodes.current.get(id);
+          el.muted = false;
+          if (gainNode) gainNode.gain.value = gain;
+          else el.volume = Math.min(1, Math.max(0, gain));
+          if (el.dataset.sourceId !== source.id) {
+            el.src = source.url;
+            el.dataset.sourceId = source.id;
+          }
+          if (!inRange || gain <= 0) {
+            if (!el.paused) el.pause();
+            return;
+          }
+          const target = (clip.inMs + local) / 1000;
+          if (Math.abs(el.currentTime - target) > 0.08) el.currentTime = target;
+          if (autoplay) {
+            if (el.paused) void el.play().catch(() => undefined);
+          } else if (!el.paused) {
+            el.pause();
+          }
+        });
+      },
+      [connectExtra],
+    );
 
     const showClip = useCallback(
       async (index: number, offsetMs: number, autoplay: boolean) => {
         const video = videoRef.current;
         const clipsNow = clipsRef.current;
         const clip = clipsNow[index];
-        if (!video || !clip) return;
+        if (!video || !clip || isAudioClip(clip)) return;
         const source = sourcesRef.current[clip.sourceId];
         if (!source) return;
 
         const gen = (syncGenRef.current += 1);
         seekingRef.current = true;
         clipIndexRef.current = index;
-        const target = (clip.inMs + clamp(offsetMs, 0, clipDuration(clip))) / 1000;
+        blankPictureRef.current = false;
+        setBlankPicture(false);
+        const local = clamp(offsetMs, 0, clipDuration(clip));
+        const target = (clip.inMs + local) / 1000;
 
         try {
+          connectGraph();
+          applyLiveGain(clip, local);
+          if (autoplay) void audioCtxRef.current?.resume();
           if (loadedSourceIdRef.current !== source.id) {
             video.src = source.url;
             loadedSourceIdRef.current = source.id;
@@ -354,27 +562,48 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
           if (gen === syncGenRef.current) seekingRef.current = false;
         }
       },
-      [],
+      [applyLiveGain, connectGraph],
     );
+
+    const showBlankFrame = useCallback(() => {
+      videoRef.current?.pause();
+      applyLiveGain(null, 0);
+      if (blankPictureRef.current) return;
+      syncGenRef.current += 1;
+      seekingRef.current = false;
+      blankPictureRef.current = true;
+      setBlankPicture(true);
+    }, [applyLiveGain]);
 
     const syncToPlayhead = useCallback(
       async (ms: number, autoplay: boolean) => {
+        syncExtraAudio(ms, autoplay);
+        if (isPastPicture(clipsRef.current, ms)) {
+          showBlankFrame();
+          return;
+        }
         const hit = locateClip(clipsRef.current, ms);
-        if (!hit) return;
+        if (!hit) {
+          showBlankFrame();
+          return;
+        }
         await showClip(hit.index, hit.offsetMs, autoplay);
       },
-      [showClip],
+      [showBlankFrame, showClip, syncExtraAudio],
     );
 
     const seek = useCallback(
       (ms: number) => {
         const next = setPlayhead(ms);
         const hit = locateClip(clipsRef.current, next);
-        if (hit) clipIndexRef.current = hit.index;
+        if (hit && !isPastPicture(clipsRef.current, next)) {
+          clipIndexRef.current = hit.index;
+          applyLiveGain(hit.clip, hit.offsetMs);
+        }
         void syncToPlayhead(next, playingRef.current);
         return next;
       },
-      [setPlayhead, syncToPlayhead],
+      [applyLiveGain, setPlayhead, syncToPlayhead],
     );
 
     useEffect(() => {
@@ -386,16 +615,19 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
           video.load();
         }
         loadedSourceIdRef.current = null;
+        blankPictureRef.current = false;
+        setBlankPicture(false);
         if (playheadRef.current !== 0) setPlayhead(0);
         return;
       }
-      const total = totalDuration(clips);
+      const total = timelineDuration(clips);
       if (playheadRef.current > total) setPlayhead(total);
       const hit = locateClip(clips, playheadRef.current);
       if (hit) clipIndexRef.current = hit.index;
+      if (hit) applyLiveGain(hit.clip, hit.offsetMs);
       if (skipClipSyncRef.current) return;
       if (!playingRef.current) void syncToPlayhead(playheadRef.current, false);
-    }, [clips, setPlayhead, syncToPlayhead]);
+    }, [applyLiveGain, clips, setPlayhead, syncToPlayhead]);
 
     useEffect(() => {
       if (!playing) return;
@@ -403,6 +635,7 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
       if (!video) return;
       let raf = 0;
       let active = true;
+      let last = performance.now();
 
       const keepPlaying = () => {
         if (active && playingRef.current && video.paused && !seekingRef.current) {
@@ -412,52 +645,81 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
 
       const goToNextClip = () => {
         const clipsNow = clipsRef.current;
-        const index = clipIndexRef.current;
-        const prev = clipsNow[index];
-        const nextClip = clipsNow[index + 1];
-        if (!prev || !nextClip) {
+        const current = clipsNow[clipIndexRef.current];
+        const videoClipsNow = videoTrackClips(clipsNow);
+        const videoIndex = current ? videoClipsNow.findIndex((item) => item.id === current.id) : -1;
+        const nextClip = videoClipsNow[videoIndex + 1];
+        if (!nextClip) {
+          const picture = totalDuration(clipsNow);
+          const timeline = timelineDuration(clipsNow);
+          showBlankFrame();
+          if (picture < timeline && playheadRef.current < timeline - 30) {
+            if (playheadRef.current < picture) setPlayhead(picture);
+            syncExtraAudio(playheadRef.current, true);
+            return;
+          }
           playingRef.current = false;
           setPlaying(false);
-          setPlayhead(totalDuration(clipsNow));
-          video.pause();
+          setPlayhead(timeline);
+          extraAudioEls.current.forEach((el) => el.pause());
           return;
         }
 
-        clipIndexRef.current = index + 1;
-        setPlayhead(clipStartMs(clipsNow, index + 1));
+        const nextIndex = clipsNow.findIndex((item) => item.id === nextClip.id);
+        clipIndexRef.current = nextIndex;
+        setPlayhead(clipStartMs(clipsNow, nextIndex));
+        applyLiveGain(nextClip, 0);
 
         const timeMs = video.currentTime * 1000;
         const sameSource =
-          prev.sourceId === nextClip.sourceId && loadedSourceIdRef.current === nextClip.sourceId;
+          current?.sourceId === nextClip.sourceId && loadedSourceIdRef.current === nextClip.sourceId;
         const stillInNext = timeMs < nextClip.outMs;
         const nearNextIn = nextClip.inMs - timeMs < 500;
 
         // Split or other continuous cut on the same file: do not pause or seek.
-        if (sameSource && stillInNext && nearNextIn) {
+        if (current && sameSource && stillInNext && nearNextIn) {
           keepPlaying();
           return;
         }
 
-        void showClip(index + 1, 0, true);
+        void showClip(nextIndex, 0, true);
       };
 
-      const tick = () => {
+      const tick = (now: number) => {
         if (!active) return;
+        const dt = now - last;
+        last = now;
         if (!seekingRef.current) {
           const clipsNow = clipsRef.current;
+          const timeline = timelineDuration(clipsNow);
           const index = clipIndexRef.current;
           const clip = clipsNow[index];
-          if (!clip) {
-            setPlaying(false);
-            return;
-          }
+          const inPicture =
+            clip && isVideoClip(clip) && !isPastPicture(clipsNow, playheadRef.current);
 
-          const sourceTime = video.currentTime * 1000;
-          if (sourceTime >= clip.outMs || video.ended) {
-            goToNextClip();
-          } else if (sourceTime >= clip.inMs) {
-            setPlayhead(clipStartMs(clipsNow, index) + (sourceTime - clip.inMs));
-            keepPlaying();
+          if (inPicture && clip) {
+            const sourceTime = video.currentTime * 1000;
+            if (sourceTime >= clip.outMs || video.ended) {
+              goToNextClip();
+            } else if (sourceTime >= clip.inMs) {
+              const local = sourceTime - clip.inMs;
+              const next = clipStartMs(clipsNow, index) + local;
+              setPlayhead(next);
+              applyLiveGain(clip, local);
+              syncExtraAudio(next, true);
+              keepPlaying();
+            }
+          } else {
+            showBlankFrame();
+            const next = Math.min(timeline, playheadRef.current + dt);
+            setPlayhead(next);
+            syncExtraAudio(next, true);
+            if (next >= timeline - 10) {
+              playingRef.current = false;
+              setPlaying(false);
+              extraAudioEls.current.forEach((el) => el.pause());
+              return;
+            }
           }
         }
         raf = requestAnimationFrame(tick);
@@ -468,10 +730,16 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
       };
 
       video.addEventListener("ended", onEnded);
+      void audioCtxRef.current?.resume();
+      syncExtraAudio(playheadRef.current, true);
 
-      const hit = locateClip(clipsRef.current, playheadRef.current);
+      const pastPicture = isPastPicture(clipsRef.current, playheadRef.current);
+      if (pastPicture) showBlankFrame();
+      const hit = pastPicture ? null : locateClip(clipsRef.current, playheadRef.current);
       void (hit ? showClip(hit.index, hit.offsetMs, true) : Promise.resolve()).then(() => {
-        if (active) raf = requestAnimationFrame(tick);
+        if (!active) return;
+        syncExtraAudio(playheadRef.current, true);
+        raf = requestAnimationFrame(tick);
       });
 
       return () => {
@@ -479,59 +747,177 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
         cancelAnimationFrame(raf);
         video.removeEventListener("ended", onEnded);
       };
-    }, [playing, setPlayhead, showClip]);
+    }, [applyLiveGain, playing, setPlayhead, showBlankFrame, showClip, syncExtraAudio]);
 
     const togglePlay = useCallback(() => {
       if (!clipsRef.current.length) return;
-      if (playheadRef.current >= totalDuration(clipsRef.current) - 250) {
+      if (playheadRef.current >= timelineDuration(clipsRef.current) - 250) {
         setPlayhead(0);
-        clipIndexRef.current = 0;
+        const first = videoTrackClips(clipsRef.current)[0];
+        clipIndexRef.current = first
+          ? clipsRef.current.findIndex((item) => item.id === first.id)
+          : 0;
       }
+      connectGraph();
+      void audioCtxRef.current?.resume();
+      if (!playingRef.current) syncExtraAudio(playheadRef.current, true);
       setPlaying((value) => !value);
-    }, [setPlayhead]);
+    }, [connectGraph, setPlayhead, syncExtraAudio]);
 
     const handleTrim = useCallback(
       (id: string, inMs: number, outMs: number, edge: "in" | "out") => {
         if (!trimBeforeRef.current) trimBeforeRef.current = captureState();
         skipClipSyncRef.current = true;
-        const next = clipsRef.current.map((clip) => (clip.id === id ? { ...clip, inMs, outMs } : clip));
+        const next = clipsRef.current.map((clip) =>
+          clip.id === id ? withClampedAudio({ ...clip, inMs, outMs }) : clip,
+        );
         clipsRef.current = next;
         setClips(next);
         onChange?.(next);
         const index = next.findIndex((clip) => clip.id === id);
         if (index < 0) return;
+        const clip = next[index];
         const start = clipStartMs(next, index);
         const duration = Math.max(0, outMs - inMs);
         const playhead = edge === "in" ? start : start + duration;
         setPlayhead(playhead);
+        if (!clip || isAudioClip(clip)) {
+          syncExtraAudio(playhead, false);
+          return;
+        }
         clipIndexRef.current = index;
         void showClip(index, edge === "in" ? 0 : Math.max(0, duration - 40), false);
       },
-      [captureState, onChange, setPlayhead, showClip],
+      [captureState, onChange, setPlayhead, showClip, syncExtraAudio],
     );
 
     const handleTrimEnd = useCallback(() => {
-      const before = trimBeforeRef.current;
-      trimBeforeRef.current = null;
-      if (before && !sameClips(before.clips, clipsRef.current)) {
-        historyRef.current.push(before);
-        syncHistoryButtons();
-      }
+      commitCoalesced(trimBeforeRef);
       skipClipSyncRef.current = false;
       const hit = locateClip(clipsRef.current, playheadRef.current);
-      if (hit) void captureThumb(hit.clip);
+      if (hit && isVideoClip(hit.clip)) void captureThumb(hit.clip);
       if (!playingRef.current) void syncToPlayhead(playheadRef.current, false);
-    }, [captureThumb, syncHistoryButtons, syncToPlayhead]);
+    }, [captureThumb, commitCoalesced, syncToPlayhead]);
+
+    const patchClip = useCallback(
+      (id: string, patch: Partial<EditorClip>) => {
+        const next = clipsRef.current.map((clip) =>
+          clip.id === id ? withClampedAudio({ ...clip, ...patch }) : clip,
+        );
+        clipsRef.current = next;
+        setClips(next);
+        onChange?.(next);
+        const hit = locateClip(next, playheadRef.current);
+        if (hit) applyLiveGain(hit.clip, hit.offsetMs);
+        syncExtraAudio(playheadRef.current, playingRef.current);
+      },
+      [applyLiveGain, onChange, syncExtraAudio],
+    );
+
+    const handleFade = useCallback(
+      (id: string, fadeInMs: number, fadeOutMs: number) => {
+        if (!fadeBeforeRef.current) fadeBeforeRef.current = captureState();
+        patchClip(id, { fadeInMs, fadeOutMs });
+      },
+      [captureState, patchClip],
+    );
+
+    const handleFadeEnd = useCallback(() => {
+      commitCoalesced(fadeBeforeRef);
+    }, [commitCoalesced]);
+
+    const handleGainInput = useCallback(
+      (percent: number) => {
+        const id = selectedIdRef.current;
+        const clip = clipsRef.current.find((item) => item.id === id);
+        if (!clip) return;
+        const source = sourcesRef.current[clip.sourceId];
+        if (!clipHasPlayableAudio(clipsRef.current, clip, source?.hasAudio !== false)) return;
+        if (!gainBeforeRef.current) gainBeforeRef.current = captureState();
+        patchClip(clip.id, { volume: clamp(percent / 100, 0, MAX_GAIN), muted: false });
+      },
+      [captureState, patchClip],
+    );
+
+    const handleGainCommit = useCallback(() => {
+      commitCoalesced(gainBeforeRef);
+    }, [commitCoalesced]);
+
+    const toggleMute = useCallback(() => {
+      const clip = clipsRef.current.find((item) => item.id === selectedIdRef.current);
+      if (!clip) return;
+      const source = sourcesRef.current[clip.sourceId];
+      if (!clipHasPlayableAudio(clipsRef.current, clip, source?.hasAudio !== false)) return;
+      recordHistory();
+      patchClip(clip.id, { muted: !clip.muted });
+    }, [patchClip, recordHistory]);
+
+    const unlinkSelected = useCallback(() => {
+      const clipsNow = clipsRef.current;
+      const clip = clipsNow.find((item) => item.id === selectedIdRef.current);
+      if (!clip || isAudioClip(clip)) return;
+      if (clipsNow.some((item) => item.linkedClipId === clip.id)) return;
+      if (sourcesRef.current[clip.sourceId]?.hasAudio === false) return;
+      recordHistory();
+      const index = clipsNow.findIndex((item) => item.id === clip.id);
+      const audio = withClampedAudio({
+        id: uid("clip"),
+        sourceId: clip.sourceId,
+        inMs: clip.inMs,
+        outMs: clip.outMs,
+        volume: clip.volume,
+        fadeInMs: clip.fadeInMs,
+        fadeOutMs: clip.fadeOutMs,
+        kind: "audio",
+        startMs: clipStartMs(clipsNow, index),
+        linkedClipId: clip.id,
+        muted: false,
+      });
+      const next = clipsNow
+        .map((item) => (item.id === clip.id ? withClampedAudio({ ...item, muted: true }) : item))
+        .concat(audio);
+      clipsRef.current = next;
+      setClips(next);
+      onChange?.(next);
+      setSelectedId(audio.id);
+      connectGraph();
+      applyLiveGain({ ...clip, muted: true }, 0);
+      syncExtraAudio(playheadRef.current, playingRef.current);
+    }, [applyLiveGain, connectGraph, onChange, recordHistory, syncExtraAudio]);
+
+    const normalizeSelected = useCallback(async () => {
+      const clip = clipsRef.current.find((item) => item.id === selectedIdRef.current);
+      const source = clip ? sourcesRef.current[clip.sourceId] : undefined;
+      const file = source?.file;
+      if (!clip || !file) return;
+      if (!clipHasPlayableAudio(clipsRef.current, clip, source.hasAudio !== false)) return;
+      setBusy(true);
+      setError(null);
+      try {
+        const peak = await measureClipPeak(file, clip.inMs, clip.outMs);
+        if (!(peak > 0)) throw new Error("Could not measure this clip for normalize.");
+        recordHistory();
+        patchClip(clip.id, { volume: normalizedVolume(peak), muted: false });
+      } catch (err) {
+        report(err);
+      } finally {
+        setBusy(false);
+      }
+    }, [patchClip, recordHistory, report]);
 
     const handleScrub = useCallback(
       (ms: number) => {
         playingRef.current = false;
         setPlaying(false);
         const next = setPlayhead(ms);
+        const pastPicture = isPastPicture(clipsRef.current, next);
         const hit = locateClip(clipsRef.current, next);
-        if (hit) {
+        if (hit && !pastPicture) {
           clipIndexRef.current = hit.index;
           setSelectedId(hit.clip.id);
+          applyLiveGain(hit.clip, hit.offsetMs);
+        } else if (pastPicture) {
+          applyLiveGain(null, 0);
         }
         pendingScrub.current = next;
         if (scrubRaf.current) return;
@@ -541,20 +927,35 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
           if (time != null) void syncToPlayhead(time, false);
         });
       },
-      [setPlayhead, syncToPlayhead],
+      [applyLiveGain, setPlayhead, syncToPlayhead],
     );
+
+    const handleMoveAudio = useCallback(
+      (id: string, startMs: number) => {
+        if (!moveBeforeRef.current) moveBeforeRef.current = captureState();
+        patchClip(id, { startMs: Math.max(0, startMs) });
+      },
+      [captureState, patchClip],
+    );
+
+    const handleMoveAudioEnd = useCallback(() => {
+      commitCoalesced(moveBeforeRef);
+    }, [commitCoalesced]);
 
     const handleReorder = useCallback(
       (from: number, to: number) => {
         if (from === to) return;
         recordHistory();
         setClips((current) => {
-          const next = current.slice();
+          const video = videoTrackClips(current);
+          const audio = audioTrackClips(current);
+          const next = video.slice();
           const [moved] = next.splice(from, 1);
           if (!moved) return current;
           next.splice(to, 0, moved);
-          onChange?.(next);
-          return next;
+          const combined = [...next, ...audio];
+          onChange?.(combined);
+          return combined;
         });
       },
       [onChange, recordHistory],
@@ -565,35 +966,111 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
         playingRef.current = false;
         setPlaying(false);
         const next = seek(ms);
+        const selected = clipsRef.current.find((clip) => clip.id === selectedIdRef.current);
+        if (selected && isAudioClip(selected)) return;
+        if (isPastPicture(clipsRef.current, next)) return;
         const hit = locateClip(clipsRef.current, next);
         if (hit) setSelectedId(hit.clip.id);
       },
       [seek],
     );
 
-    const split = useCallback(() => {
-      const hit = locateClip(clipsRef.current, playheadRef.current);
-      if (!hit) return;
-      const local = hit.clip.inMs + hit.offsetMs;
-      if (local <= hit.clip.inMs + MIN_CLIP_MS || local >= hit.clip.outMs - MIN_CLIP_MS) return;
+    const split = useCallback(
+      (allTracks = false) => {
+        const clipsNow = clipsRef.current;
+        const playhead = playheadRef.current;
+        const replacements = new Map<string, { left: EditorClip; right: EditorClip }>();
+
+        const takeVideo = () => {
+          const hit = locateClip(clipsNow, playhead);
+          if (!hit) return;
+          const parts = splitVideoClip(hit.clip, hit.offsetMs);
+          if (parts) replacements.set(hit.clip.id, { left: parts[0], right: parts[1] });
+        };
+
+        const takeAudio = (clip: EditorClip) => {
+          const parts = splitAudioClip(clip, playhead);
+          if (parts) replacements.set(clip.id, { left: parts[0], right: parts[1] });
+        };
+
+        if (allTracks) {
+          takeVideo();
+          audioClipsAt(clipsNow, playhead).forEach(takeAudio);
+        } else {
+          const selected = clipsNow.find((clip) => clip.id === selectedIdRef.current);
+          if (selected && isAudioClip(selected)) takeAudio(selected);
+          else takeVideo();
+        }
+
+        if (!replacements.size) return;
+        recordHistory();
+
+        for (const { left, right } of replacements.values()) {
+          if (!isAudioClip(left) || !left.linkedClipId) continue;
+          const parent = replacements.get(left.linkedClipId);
+          if (!parent) continue;
+          left.linkedClipId = parent.left.id;
+          right.linkedClipId = parent.right.id;
+        }
+
+        const next: EditorClip[] = [];
+        for (const clip of clipsNow) {
+          const parts = replacements.get(clip.id);
+          if (parts) next.push(parts.left, parts.right);
+          else if (clip.linkedClipId && replacements.has(clip.linkedClipId)) {
+            const parent = replacements.get(clip.linkedClipId);
+            next.push(parent ? { ...clip, linkedClipId: parent.left.id } : clip);
+          } else {
+            next.push(clip);
+          }
+        }
+
+        setClips(() => {
+          onChange?.(next);
+          return next;
+        });
+
+        const selectedParts = replacements.get(selectedIdRef.current ?? "");
+        const videoHit = locateClip(clipsNow, playhead);
+        const videoParts = videoHit ? replacements.get(videoHit.clip.id) : undefined;
+        const nextSelected = selectedParts?.right ?? videoParts?.right;
+        if (nextSelected) setSelectedId(nextSelected.id);
+        if (videoParts) {
+          clipIndexRef.current = next.findIndex((clip) => clip.id === videoParts.right.id);
+          setClipThumbs((current) => {
+            const inherited = current[videoHit?.clip.id ?? ""];
+            const thumbsNext = { ...current };
+            if (videoHit) delete thumbsNext[videoHit.clip.id];
+            if (inherited) thumbsNext[videoParts.left.id] = inherited;
+            return thumbsNext;
+          });
+          void captureThumb(videoParts.right);
+        }
+      },
+      [captureThumb, onChange, recordHistory],
+    );
+
+    const duplicateSelected = useCallback(() => {
+      const clipsNow = clipsRef.current;
+      const index = clipsNow.findIndex((clip) => clip.id === selectedIdRef.current);
+      const clip = clipsNow[index];
+      if (!clip) return;
       recordHistory();
-      const left: EditorClip = { ...hit.clip, id: uid("clip"), outMs: local };
-      const right: EditorClip = { ...hit.clip, id: uid("clip"), inMs: local };
-      setClips((current) => {
-        const next = [...current.slice(0, hit.index), left, right, ...current.slice(hit.index + 1)];
-        onChange?.(next);
-        return next;
-      });
-      setSelectedId(right.id);
-      clipIndexRef.current = hit.index + 1;
-      setClipThumbs((current) => {
-        const inherited = current[hit.clip.id];
-        const next = { ...current };
-        delete next[hit.clip.id];
-        if (inherited) next[left.id] = inherited;
-        return next;
-      });
-      void captureThumb(right);
+      const copy = withClampedAudio(duplicateClip(clip, uid("clip")));
+      const next = [...clipsNow.slice(0, index + 1), copy, ...clipsNow.slice(index + 1)];
+      clipsRef.current = next;
+      setClips(next);
+      onChange?.(next);
+      selectedIdRef.current = copy.id;
+      setSelectedId(copy.id);
+      if (isVideoClip(copy)) {
+        clipIndexRef.current = next.findIndex((item) => item.id === copy.id);
+        const inherited = thumbsRef.current[clip.id];
+        if (inherited) {
+          setClipThumbs((current) => ({ ...current, [copy.id]: inherited }));
+        }
+        void captureThumb(copy);
+      }
     }, [captureThumb, onChange, recordHistory]);
 
     const deleteSelected = useCallback(() => {
@@ -626,20 +1103,27 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
     }, [onChange, recordHistory, seek]);
 
     const exportVideo = useCallback(async () => {
-      if (!clips.length) return null;
+      const picture = videoTrackClips(clips);
+      if (!picture.length) return null;
       setBusy(true);
       setProgress(0);
       setError(null);
       try {
-        const first = sourceMap[clips[0]?.sourceId ?? ""];
+        const first = sourceMap[picture[0]?.sourceId ?? ""];
         const result = await exportTimeline({
           clips: clips.map((clip) => ({
             file: sourceMap[clip.sourceId]?.file ?? new Blob(),
             inMs: clip.inMs,
             outMs: clip.outMs,
+            volume: clip.volume,
+            muted: Boolean(clip.muted) || hasDetachedAudio(clips, clip.id),
+            fadeInMs: clip.fadeInMs,
+            fadeOutMs: clip.fadeOutMs,
+            kind: clip.kind,
+            startMs: clip.startMs,
           })),
-          width: first?.width ?? 1280,
-          height: first?.height ?? 720,
+          width: first?.width || 1280,
+          height: first?.height || 720,
           onProgress: setProgress,
         });
         setLastExport(result);
@@ -665,7 +1149,11 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
     const addDroppedFiles = useCallback(
       (fileList: FileList | File[]) => {
         const files = [...fileList].filter(
-          (file) => file.type.startsWith("video/") || VIDEO_FILE.test(file.name),
+          (file) =>
+            file.type.startsWith("video/") ||
+            file.type.startsWith("audio/") ||
+            VIDEO_FILE.test(file.name) ||
+            AUDIO_FILE.test(file.name),
         );
         files.forEach((file) => void addSource(file, file.name).catch(() => undefined));
       },
@@ -703,8 +1191,19 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
 
     useImperativeHandle(
       ref,
-      () => ({ addSource, split, deleteSelected, undo, redo, exportVideo, download }),
-      [addSource, deleteSelected, download, exportVideo, redo, split, undo],
+      () => ({
+        addSource,
+        split,
+        duplicateSelected,
+        deleteSelected,
+        undo,
+        redo,
+        exportVideo,
+        download,
+        normalizeSelected,
+        unlinkSelected,
+      }),
+      [addSource, deleteSelected, download, duplicateSelected, exportVideo, normalizeSelected, redo, split, undo, unlinkSelected],
     );
 
     useEffect(() => {
@@ -733,6 +1232,11 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
         if (meta && (event.key === "y" || event.key === "Y")) {
           event.preventDefault();
           redo();
+          return;
+        }
+        if (event.key === "d" || event.key === "D") {
+          event.preventDefault();
+          duplicateSelected();
           return;
         }
         if (meta) return;
@@ -775,12 +1279,22 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
         if (event.key === "End") {
           if (!clipsRef.current.length) return;
           event.preventDefault();
-          handleScrub(totalDuration(clipsRef.current));
+          handleScrub(timelineDuration(clipsRef.current));
           return;
         }
         if (event.key === "s" || event.key === "S") {
           event.preventDefault();
-          split();
+          split(event.shiftKey);
+          return;
+        }
+        if (event.key === "m" || event.key === "M") {
+          event.preventDefault();
+          toggleMute();
+          return;
+        }
+        if (event.key === "u" || event.key === "U") {
+          event.preventDefault();
+          unlinkSelected();
           return;
         }
         if (event.key === "Backspace" || event.key === "Delete") {
@@ -806,11 +1320,17 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
       };
       window.addEventListener("keydown", onKey);
       return () => window.removeEventListener("keydown", onKey);
-    }, [deleteSelected, handleScrub, redo, split, togglePlay, undo]);
+    }, [deleteSelected, duplicateSelected, handleScrub, redo, split, toggleMute, togglePlay, undo, unlinkSelected]);
 
     const shortcutMod =
       typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘" : "Ctrl";
     const selected = clips.find((clip) => clip.id === selectedId) ?? null;
+    const selectedSource = selected ? sourceMap[selected.sourceId] : undefined;
+    const mixerEnabled =
+      selected != null && clipHasPlayableAudio(clips, selected, selectedSource?.hasAudio !== false);
+    const gainPercent = Math.round((selected?.volume ?? 1) * 100);
+    const canUnlink = selected != null && mixerEnabled && isVideoClip(selected);
+    const audioMoved = selected != null && isVideoClip(selected) && hasDetachedAudio(clips, selected.id);
 
     return (
       <div
@@ -828,8 +1348,19 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
       >
         <div className="rmt-editor__toolbar" role="toolbar" aria-label="Editor tools">
           <div className="rmt-editor__tools">
-            <IconButton label="Split" shortcut="S" disabled={!clips.length} onClick={split}>
+            <IconButton label="Split" shortcut="S" disabled={!clips.length} onClick={() => split()}>
               <IconSplit />
+            </IconButton>
+            <IconButton
+              label="Split all tracks"
+              shortcut="Shift+S"
+              disabled={!clips.length}
+              onClick={() => split(true)}
+            >
+              <IconSplitTracks />
+            </IconButton>
+            <IconButton label="Duplicate" shortcut="D" disabled={!selected} onClick={duplicateSelected}>
+              <IconDuplicate />
             </IconButton>
             <IconButton label="Delete" shortcut="Delete" disabled={!selected} onClick={deleteSelected}>
               <IconTrash />
@@ -851,7 +1382,7 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
             <input
               ref={fileRef}
               type="file"
-              accept="video/*"
+              accept="video/*,audio/*,.webm,.m4a,.mp3,.ogg,.wav,.aac,.flac"
               hidden
               multiple
               tabIndex={-1}
@@ -868,7 +1399,7 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
               type="button"
               className="rmt-btn rmt-btn--primary"
               onClick={() => void exportVideo()}
-              disabled={!clips.length || busy}
+              disabled={!pictureClips.length || busy}
               aria-label={
                 progress == null
                   ? exportLabel
@@ -894,10 +1425,58 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
           </div>
         </div>
 
-        <div
+        <div className="rmt-editor__mixer">
+          <IconButton
+            label={selected?.muted || audioMoved ? "Unmute" : "Mute"}
+            shortcut="M"
+            disabled={!mixerEnabled}
+            pressed={Boolean(selected?.muted) || audioMoved}
+            onClick={toggleMute}
+          >
+            {selected?.muted || audioMoved ? <IconMute /> : <IconSpeaker />}
+          </IconButton>
+          <IconButton
+            label="Unlink audio"
+            shortcut="U"
+            disabled={!canUnlink}
+            onClick={unlinkSelected}
+          >
+            <IconUnlink />
+          </IconButton>
+          <label className="rmt-editor__gain">
+            Gain
+            <input
+              type="range"
+              min={0}
+              max={200}
+              step={1}
+              value={mixerEnabled ? gainPercent : 100}
+              disabled={!mixerEnabled}
+              aria-label="Gain"
+              aria-valuetext={mixerEnabled ? `${gainPercent} percent` : "No audio"}
+              onChange={(event) => handleGainInput(Number(event.target.value))}
+              onPointerUp={handleGainCommit}
+              onBlur={handleGainCommit}
+            />
+            <span className="rmt-editor__gain-value">
+              {!selected ? "—" : !mixerEnabled ? "No audio" : selected.muted ? "Muted" : `${gainPercent}%`}
+            </span>
+          </label>
+          <button
+            type="button"
+            className="rmt-btn"
+            disabled={!mixerEnabled || busy}
+            onClick={() => void normalizeSelected()}
+          >
+            Normalize
+          </button>
+        </div>
+
+          <div
           className={[
             "rmt-editor__preview",
             clips.length ? (playing ? "is-playing" : "is-paused") : "",
+            blankPicture ? "is-blank" : "",
           ]
             .filter(Boolean)
             .join(" ")}
@@ -912,13 +1491,25 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
             preload="auto"
             aria-hidden="true"
           />
+          {extraAudio.map((clip) => (
+            <audio
+              key={clip.id}
+              className="rmt-editor__audio"
+              ref={(node) => {
+                if (node) extraAudioEls.current.set(clip.id, node);
+                else extraAudioEls.current.delete(clip.id);
+              }}
+              preload="auto"
+              playsInline
+            />
+          ))}
           {!clips.length && (
             <div className="rmt-editor__empty">
               <strong>No clips yet</strong>
               <span>
                 {showOpenFile
-                  ? "Drop a video here, send a recording, or open a file."
-                  : "Drop a video here, or send a recording."}
+                  ? "Drop a video or audio file, send a recording, or open a file."
+                  : "Drop a video or audio file, or send a recording."}
               </span>
             </div>
           )}
@@ -956,7 +1547,18 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
           onScrub={handleScrub}
           onTrim={handleTrim}
           onTrimEnd={handleTrimEnd}
+          onFade={handleFade}
+          onFadeEnd={handleFadeEnd}
           onReorder={handleReorder}
+          onMoveAudio={handleMoveAudio}
+          onMoveAudioEnd={handleMoveAudioEnd}
+          showFades
+          showAudioTrack
+          emptyHint={
+            showOpenFile
+              ? "Drop a video or audio file, send a recording, or open a file."
+              : "Drop a video or audio file, or send a recording."
+          }
         />
 
         {error && (
@@ -979,6 +1581,26 @@ function sourceIdFor(file: Blob): string {
   return id;
 }
 
+function splitVideoClip(clip: EditorClip, offsetMs: number): [EditorClip, EditorClip] | null {
+  const sourceLocal = clip.inMs + offsetMs;
+  if (sourceLocal <= clip.inMs + MIN_CLIP_MS || sourceLocal >= clip.outMs - MIN_CLIP_MS) return null;
+  return [
+    { ...clip, id: uid("clip"), outMs: sourceLocal },
+    { ...clip, id: uid("clip"), inMs: sourceLocal },
+  ];
+}
+
+function splitAudioClip(clip: EditorClip, playheadMs: number): [EditorClip, EditorClip] | null {
+  const start = audioClipStart(clip);
+  const local = playheadMs - start;
+  if (local <= MIN_CLIP_MS || local >= clipDuration(clip) - MIN_CLIP_MS) return null;
+  const sourceLocal = clip.inMs + local;
+  return [
+    { ...clip, id: uid("clip"), outMs: sourceLocal },
+    { ...clip, id: uid("clip"), inMs: sourceLocal, startMs: playheadMs },
+  ];
+}
+
 function positiveMs(value: number | undefined): number | undefined {
   return value && value > 0 ? value : undefined;
 }
@@ -995,6 +1617,7 @@ function isFileDrag(event: React.DragEvent): boolean {
 }
 
 const VIDEO_FILE = /\.(mp4|webm|mov|m4v|mkv)$/i;
+const AUDIO_FILE = /\.(mp3|m4a|wav|ogg|oga|aac|flac|weba|webm)$/i;
 
 function wait(video: HTMLVideoElement, event: string, timeoutMs = 4000): Promise<void> {
   return new Promise((resolve, reject) => {

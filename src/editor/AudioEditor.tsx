@@ -22,6 +22,7 @@ import {
   IconSplit,
   IconTrash,
   IconUndo,
+  IconDuplicate,
 } from "../icons";
 import {
   MAX_GAIN,
@@ -42,6 +43,7 @@ import {
   clamp,
   clipDuration,
   clipStartMs,
+  duplicateClip,
   locateClip,
   totalDuration,
 } from "./timelineMath";
@@ -49,6 +51,7 @@ import {
 export type AudioEditorHandle = {
   addSource: (input: EditorInput | Blob, name?: string) => Promise<void>;
   split: () => void;
+  duplicateSelected: () => void;
   deleteSelected: () => void;
   undo: () => void;
   redo: () => void;
@@ -682,6 +685,22 @@ export const AudioEditor = forwardRef<AudioEditorHandle, AudioEditorProps>(funct
     clipIndexRef.current = hit.index + 1;
   }, [onChange, recordHistory]);
 
+  const duplicateSelected = useCallback(() => {
+    const clipsNow = clipsRef.current;
+    const index = clipsNow.findIndex((clip) => clip.id === selectedIdRef.current);
+    const clip = clipsNow[index];
+    if (!clip) return;
+    recordHistory();
+    const copy = withClampedAudio(duplicateClip(clip, uid("clip")));
+    const next = [...clipsNow.slice(0, index + 1), copy, ...clipsNow.slice(index + 1)];
+    clipsRef.current = next;
+    setClips(next);
+    onChange?.(next);
+    selectedIdRef.current = copy.id;
+    setSelectedId(copy.id);
+    clipIndexRef.current = index + 1;
+  }, [onChange, recordHistory]);
+
   const deleteSelected = useCallback(() => {
     const id = selectedIdRef.current;
     if (!id) return;
@@ -781,6 +800,7 @@ export const AudioEditor = forwardRef<AudioEditorHandle, AudioEditorProps>(funct
     () => ({
       addSource,
       split,
+      duplicateSelected,
       deleteSelected,
       undo,
       redo,
@@ -788,7 +808,7 @@ export const AudioEditor = forwardRef<AudioEditorHandle, AudioEditorProps>(funct
       exportAudio,
       download,
     }),
-    [addSource, deleteSelected, download, exportAudio, normalizeSelected, redo, split, undo],
+    [addSource, deleteSelected, download, duplicateSelected, exportAudio, normalizeSelected, redo, split, undo],
   );
 
   useEffect(() => {
@@ -817,6 +837,11 @@ export const AudioEditor = forwardRef<AudioEditorHandle, AudioEditorProps>(funct
       if (meta && (event.key === "y" || event.key === "Y")) {
         event.preventDefault();
         redo();
+        return;
+      }
+      if (event.key === "d" || event.key === "D") {
+        event.preventDefault();
+        duplicateSelected();
         return;
       }
       if (meta) return;
@@ -895,7 +920,7 @@ export const AudioEditor = forwardRef<AudioEditorHandle, AudioEditorProps>(funct
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [deleteSelected, handleScrub, redo, split, toggleMute, togglePlay, undo]);
+  }, [deleteSelected, duplicateSelected, handleScrub, redo, split, toggleMute, togglePlay, undo]);
 
   const shortcutMod =
     typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘" : "Ctrl";
@@ -922,6 +947,9 @@ export const AudioEditor = forwardRef<AudioEditorHandle, AudioEditorProps>(funct
         <div className="rmt-editor__tools">
           <IconButton label="Split" shortcut="S" disabled={!clips.length} onClick={split}>
             <IconSplit />
+          </IconButton>
+          <IconButton label="Duplicate" shortcut="D" disabled={!selected} onClick={duplicateSelected}>
+            <IconDuplicate />
           </IconButton>
           <IconButton label="Delete" shortcut="Delete" disabled={!selected} onClick={deleteSelected}>
             <IconTrash />

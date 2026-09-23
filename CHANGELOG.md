@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-22
+
+Puts clip audio controls and a second audio track into `VideoEditor`.
+
+### Added
+
+- Extra audio track on `VideoEditor`: drop or `addSource` an audio file to place it at the playhead. Drag to slip in time. Overlapping extras mix in preview and export, and stack onto extra timeline rows so they stay selectable.
+- `EditorClip.kind`, `startMs`, and `linkedClipId`. Omitted `kind` stays magnetic (including `AudioEditor`).
+- **Unlink audio** (U) moves a video clip’s soundtrack onto the extra track for J/L cuts. Picture stays silent in preview and export; the sound exists only on that track.
+- **Split all tracks** (Shift+S) cuts picture and extra audio at the playhead. Linked halves stay paired.
+- `VideoEditorHandle.unlinkSelected()`.
+- **Duplicate** (D) copies the selected clip in `VideoEditor` and `AudioEditor`. Picture copies follow the original on the magnetic track; extra-audio copies start when the original ends.
+- Demo app shows Download on the recorders and editors (`showDownload`).
+- Trim handles snap to a hovered clip: extra audio ↔ video uses in→start / out→end; extra-audio neighbors snap to the nearest start or end. Hovering another clip’s trim handle snaps to that edge, clamped to min length and source bounds.
+- Timeline zoom goes down to 0.5× (tenths). 1× leaves about 50px after the last clip so you can trim longer; zooming out gives more of that room.
+
+### Changed
+
+- Video clips already had gain, mute, fades, and normalize; export now mixes those envelopes with extra-track audio. Mixer controls stay disabled on picture-only clips (unlinked or silent sources).
+- `VideoEditor` Open file / drop accepts audio as well as video. Export still needs at least one picture clip.
+- While a trim handle is down, clip boxes and the ruler stay put; only the handle (and a dim overlay) follow the pointer until release.
+- Magnetic snap uses a constant pixel radius, so zoom no longer changes how far away cuts attract.
+
+### Fixed
+
+- Extra-audio clips were drawn `8px` to the right of the picture track and ruler.
+- Extra-track audio could stay silent in preview because `play()` ran after the click/key gesture.
+- Extra-audio rows no longer reshuffle by length while trimming; a clip keeps its lane even if a shorter edit could fit on a row above.
+- Camera overlay could freeze after screen capture started because the webcam `<video>` was not in the document. Source videos stay mounted (and playing) so the pip keeps moving.
+- Camera overlay froze when switching to the shared tab: background tabs pause `requestAnimationFrame`. Compositing now follows live camera/screen tracks so frames keep arriving while the recorder is hidden.
+- Playhead stopped at the last picture clip when extra audio ran longer. It now follows the full timeline; preview shows a blank frame in that tail (export already padded with black).
+- Stopping a recording released the camera but left screen capture running. Stop now ends the display-media stream too.
+
 ## [0.3.0] - 2026-09-21
 
 Adds a standalone audio editor.
@@ -49,7 +82,8 @@ Initial public release: in-browser React recorder and editor. Nothing is uploade
 - Dark palette by default; `data-theme="light"` or `data-theme="dark"` on an ancestor switches tokens (`rmt-*` CSS variables).
 - Helpers `detectCapabilities`, `pickMimeType`, and `extensionForMime`.
 
-[Unreleased]: https://github.com/anthonyrivas/react-media-tools/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/anthonyrivas/react-media-tools/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/anthonyrivas/react-media-tools/releases/tag/v0.4.0
 [0.3.0]: https://github.com/anthonyrivas/react-media-tools/releases/tag/v0.3.0
 [0.2.0]: https://github.com/anthonyrivas/react-media-tools/releases/tag/v0.2.0
 [0.1.0]: https://github.com/anthonyrivas/react-media-tools/releases/tag/v0.1.0

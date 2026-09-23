@@ -18,7 +18,9 @@ export default function App() {
   const takeCount = useRef(0);
   const audioTakeCount = useRef(0);
   const [theme, setTheme] = useState<Theme>("dark");
-  const [message, setMessage] = useState("Record a take, or drop a file on the editor.");
+  const [message, setMessage] = useState(
+    "Record a take, drop a file, or unlink clip audio onto the extra track.",
+  );
   const [audioMessage, setAudioMessage] = useState("Record a take, or drop a file on the audio editor.");
 
   useLayoutEffect(() => {
@@ -56,9 +58,17 @@ export default function App() {
         durationMs: result.durationMs,
       });
       setAudioMessage(`${name} added. Trim, fade, or export when you are ready.`);
+      await editorRef.current?.addSource({
+        file: result.blob,
+        name,
+        durationMs: result.durationMs,
+      });
+      setMessage(`${name} added to the video editor audio track.`);
     } catch (error) {
       audioTakeCount.current = Math.max(0, audioTakeCount.current - 1);
-      setAudioMessage(error instanceof Error ? error.message : String(error));
+      const text = error instanceof Error ? error.message : String(error);
+      setAudioMessage(text);
+      setMessage(text);
     }
   };
 
@@ -101,6 +111,7 @@ export default function App() {
           <p>Chrome, Firefox, and Safari. Unavailable capture modes stay off.</p>
         </div>
         <VideoRecorder
+          showDownload
           onRecordingStop={(result) => void ingest(result)}
           onError={(error) => setMessage(error.message)}
         />
@@ -114,6 +125,7 @@ export default function App() {
         <VideoEditor
           ref={editorRef}
           showOpenFile
+          showDownload
           onExport={(result) => setMessage(`Exported ${result.filename}`)}
           onError={(error) => setMessage(error.message)}
         />
@@ -122,9 +134,10 @@ export default function App() {
       <section className="studio__panel">
         <div className="studio__panel-head">
           <h2>Audio recorder</h2>
-          <p>Microphone only. Stop to send the take into the audio editor.</p>
+          <p>Microphone only. Stop to send the take into the audio editor and the video editor audio track.</p>
         </div>
         <AudioRecorder
+          showDownload
           onRecordingStop={(result) => void ingestAudio(result)}
           onError={(error) => setAudioMessage(error.message)}
         />
@@ -138,6 +151,7 @@ export default function App() {
         <AudioEditor
           ref={audioEditorRef}
           showOpenFile
+          showDownload
           onExport={(result) => setAudioMessage(`Exported ${result.filename}`)}
           onError={(error) => setAudioMessage(error.message)}
         />

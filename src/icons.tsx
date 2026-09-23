@@ -44,6 +44,25 @@ export function IconSplit() {
   );
 }
 
+export function IconSplitTracks() {
+  return (
+    <IconSvg>
+      <path d="M4 8h16" />
+      <path d="M4 16h16" />
+      <path d="M12 4v16" />
+    </IconSvg>
+  );
+}
+
+export function IconDuplicate() {
+  return (
+    <IconSvg>
+      <rect x="8" y="8" width="11" height="11" rx="2" />
+      <path d="M15 8V6.8A1.8 1.8 0 0 0 13.2 5H6.8A1.8 1.8 0 0 0 5 6.8v6.4A1.8 1.8 0 0 0 6.8 15H8" />
+    </IconSvg>
+  );
+}
+
 export function IconTrash() {
   return (
     <IconSvg>
@@ -156,6 +175,16 @@ export function IconMute() {
       <path d="M4 9.5v5h3.2L12 18.5v-13L7.2 9.5H4z" />
       <path d="m15 9 6 6" />
       <path d="m21 9-6 6" />
+    </IconSvg>
+  );
+}
+
+export function IconUnlink() {
+  return (
+    <IconSvg>
+      <path d="M8.8 15.2 7 17a3.2 3.2 0 0 1-4.5-4.5l2.5-2.5A3.2 3.2 0 0 1 9.2 10" />
+      <path d="M15.2 8.8 17 7a3.2 3.2 0 0 1 4.5 4.5l-2.5 2.5A3.2 3.2 0 0 1 14.8 14" />
+      <path d="m9 15 6-6" />
     </IconSvg>
   );
 }

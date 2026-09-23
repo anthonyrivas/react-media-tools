@@ -14,6 +14,7 @@ import type {
 } from "../types";
 import { stopStream, waitForEvent } from "../utils";
 import { clampOverlay, defaultOverlay, overlayPixels, pathRoundedRect, pipCornerRadius } from "./overlay";
+import { pumpTrackFrames, startBackgroundDrawClock, type PaintFrame } from "./trackFrames";
 
 export type ComposerSnapshot = {
   status: RecorderStatus;
@@ -40,8 +41,12 @@ function createHiddenVideo(): HTMLVideoElement {
   video.playsInline = true;
   video.muted = true;
   video.autoplay = true;
+  video.preload = "auto";
+  video.disablePictureInPicture = true;
+  video.className = "rmt-recorder__source-video";
   video.setAttribute("playsinline", "true");
   video.setAttribute("webkit-playsinline", "true");
+  video.setAttribute("aria-hidden", "true");
   return video;
 }
 
@@ -77,7 +82,13 @@ export class MediaComposer {
   private captureStream: MediaStream | null = null;
 
   private raf = 0;
+  private cameraFrame = 0;
+  private screenFrame = 0;
   private tick: number | null = null;
+  private stopCameraPump: (() => void) | null = null;
+  private stopScreenPump: (() => void) | null = null;
+  private stopDrawClock: (() => void) | null = null;
+  private latestCameraFrame: PaintFrame | null = null;
   private startedAt = 0;
   private pausedAt = 0;
   private pausedMs = 0;
@@ -105,6 +116,10 @@ export class MediaComposer {
     this.canvas.width = 1280;
     this.canvas.height = 720;
     this.loop = this.loop.bind(this);
+    this.mountSourceVideo(this.cameraVideo);
+    this.mountSourceVideo(this.screenVideo);
+    this.cameraVideo.addEventListener("pause", this.onCameraPause);
+    document.addEventListener("visibilitychange", this.onVisibility);
     this.raf = requestAnimationFrame(this.loop);
   }
 
@@ -209,6 +224,8 @@ export class MediaComposer {
       this.pausedMs = 0;
       this.pausedAt = 0;
       this.status = "recording";
+      this.restartTrackPumps();
+      this.ensureBackgroundClock();
       this.startTick();
       this.emit();
     });
@@ -271,8 +288,10 @@ export class MediaComposer {
       this.captureStream = null;
       this.sizeLocked = false;
       this.lastRecording = result;
+      this.stopBackgroundClock();
       this.stopTick();
       if (this.camera) await this.setCamera(false);
+      if (this.screen) await this.setScreen(false);
       this.status = this.camera || this.screen ? "preview" : "idle";
       this.updateCanvasSize();
       this.emit();
@@ -283,6 +302,14 @@ export class MediaComposer {
   destroy(): void {
     this.destroyed = true;
     cancelAnimationFrame(this.raf);
+    document.removeEventListener("visibilitychange", this.onVisibility);
+    this.stopTrackPumps();
+    this.stopBackgroundClock();
+    this.stopFrameWatch(this.cameraVideo, "camera");
+    this.stopFrameWatch(this.screenVideo, "screen");
+    this.cameraVideo.removeEventListener("pause", this.onCameraPause);
+    this.cameraVideo.remove();
+    this.screenVideo.remove();
     this.stopTick();
     if (this.recorder && this.recorder.state !== "inactive") this.recorder.stop();
     this.recorder = null;
@@ -317,8 +344,10 @@ export class MediaComposer {
     if (!enabled) {
       stopStream(this.cameraStream);
       this.cameraStream = null;
+      this.stopFrameWatch(this.cameraVideo, "camera");
       this.cameraVideo.srcObject = null;
       this.camera = false;
+      this.restartTrackPumps();
       this.updateCanvasSize();
       return;
     }
@@ -336,8 +365,10 @@ export class MediaComposer {
       audio: false,
     });
     this.cameraStream = stream;
+    this.mountSourceVideo(this.cameraVideo);
     this.cameraVideo.srcObject = stream;
     await playVideo(this.cameraVideo);
+    this.watchVideoFrames(this.cameraVideo, "camera");
     if (this.cameraVideo.videoWidth && this.cameraVideo.videoHeight) {
       this.cameraAspect = this.cameraVideo.videoWidth / this.cameraVideo.videoHeight;
     }
@@ -346,6 +377,7 @@ export class MediaComposer {
       void this.setSource("camera", false);
     });
     this.camera = true;
+    this.restartTrackPumps();
     this.updateCanvasSize();
   }
 
@@ -354,9 +386,11 @@ export class MediaComposer {
       this.disconnectSystemSource();
       stopStream(this.screenStream);
       this.screenStream = null;
+      this.stopFrameWatch(this.screenVideo, "screen");
       this.screenVideo.srcObject = null;
       this.screen = false;
       this.systemAudioTrack = false;
+      this.restartTrackPumps();
       this.updateCanvasSize();
       return;
     }
@@ -369,12 +403,22 @@ export class MediaComposer {
     this.disconnectSystemSource();
     stopStream(this.screenStream);
     this.screenStream = stream;
+    this.mountSourceVideo(this.screenVideo);
     this.screenVideo.srcObject = stream;
     await playVideo(this.screenVideo);
+    this.watchVideoFrames(this.screenVideo, "screen");
+    if (this.camera && this.cameraStream) {
+      this.cameraStream.getVideoTracks().forEach((track) => {
+        track.enabled = true;
+      });
+      await playVideo(this.cameraVideo);
+      this.watchVideoFrames(this.cameraVideo, "camera");
+    }
     stream.getVideoTracks()[0]?.addEventListener("ended", () => {
       void this.setSource("screen", false);
     });
     this.screen = true;
+    this.restartTrackPumps();
     this.systemAudioTrack = stream.getAudioTracks().some((track) => track.readyState === "live");
     if (this.systemAudio) this.connectSystemSource();
     this.updateCanvasSize();
@@ -542,41 +586,163 @@ export class MediaComposer {
     }
   }
 
+  private mountSourceVideo(video: HTMLVideoElement): void {
+    const host = this.canvas.parentElement ?? document.body;
+    if (video.parentElement !== host) host.appendChild(video);
+  }
+
+  private onCameraPause = (): void => {
+    if (this.destroyed || !this.camera || !this.cameraStream) return;
+    this.keepPlaying(this.cameraVideo);
+  };
+
+  private keepPlaying(video: HTMLVideoElement): void {
+    if (this.destroyed || !video.srcObject) return;
+    if (video.paused || video.ended) void video.play().catch(() => undefined);
+  }
+
+  private restartTrackPumps(): void {
+    this.stopTrackPumps();
+    const cameraTrack = this.cameraStream?.getVideoTracks()[0];
+    const screenTrack = this.screenStream?.getVideoTracks()[0];
+    if (cameraTrack) {
+      this.stopCameraPump = pumpTrackFrames(cameraTrack, (frame) => {
+        if (this.destroyed) {
+          frame.close();
+          return;
+        }
+        this.latestCameraFrame?.close();
+        this.latestCameraFrame = frame;
+        this.draw();
+      });
+    }
+    if (screenTrack) {
+      this.stopScreenPump = pumpTrackFrames(screenTrack, (frame) => {
+        if (this.destroyed) {
+          frame.close();
+          return;
+        }
+        this.draw(frame);
+        frame.close();
+      });
+    }
+  }
+
+  private stopTrackPumps(): void {
+    this.stopCameraPump?.();
+    this.stopScreenPump?.();
+    this.stopCameraPump = null;
+    this.stopScreenPump = null;
+    this.latestCameraFrame?.close();
+    this.latestCameraFrame = null;
+  }
+
+  private ensureBackgroundClock(): void {
+    if (this.stopDrawClock || this.destroyed) return;
+    this.stopDrawClock = startBackgroundDrawClock(() => {
+      if (!this.destroyed) this.draw();
+    });
+  }
+
+  private stopBackgroundClock(): void {
+    this.stopDrawClock?.();
+    this.stopDrawClock = null;
+  }
+
+  private onVisibility = (): void => {
+    if (document.hidden) {
+      if (this.status === "recording" || (this.camera && this.screen)) {
+        this.ensureBackgroundClock();
+      }
+      return;
+    }
+    if (this.status !== "recording") this.stopBackgroundClock();
+    if (this.camera) this.keepPlaying(this.cameraVideo);
+    if (this.screen) this.keepPlaying(this.screenVideo);
+  };
+
+  private cameraImage(): CanvasImageSource | null {
+    if (this.latestCameraFrame) return this.latestCameraFrame;
+    if (this.camera && this.cameraVideo.readyState >= 2 && this.cameraVideo.videoWidth > 0) {
+      return this.cameraVideo;
+    }
+    return null;
+  }
+
+  private screenImage(): CanvasImageSource | null {
+    if (this.screen && this.screenVideo.readyState >= 2 && this.screenVideo.videoWidth > 0) {
+      return this.screenVideo;
+    }
+    return null;
+  }
+
+  private watchVideoFrames(video: HTMLVideoElement, slot: "camera" | "screen"): void {
+    this.stopFrameWatch(video, slot);
+    if (!("requestVideoFrameCallback" in video) || !video.srcObject) return;
+    const tick = () => {
+      if (this.destroyed || !video.srcObject) return;
+      this.draw();
+      const id = video.requestVideoFrameCallback(tick);
+      if (slot === "camera") this.cameraFrame = id;
+      else this.screenFrame = id;
+    };
+    const id = video.requestVideoFrameCallback(tick);
+    if (slot === "camera") this.cameraFrame = id;
+    else this.screenFrame = id;
+  }
+
+  private stopFrameWatch(video: HTMLVideoElement, slot: "camera" | "screen"): void {
+    const id = slot === "camera" ? this.cameraFrame : this.screenFrame;
+    if (id && "cancelVideoFrameCallback" in video) {
+      video.cancelVideoFrameCallback(id);
+    }
+    if (slot === "camera") this.cameraFrame = 0;
+    else this.screenFrame = 0;
+  }
+
   private loop(): void {
     if (this.destroyed) return;
     this.draw();
     this.raf = requestAnimationFrame(this.loop);
   }
 
-  private draw(): void {
+  private draw(screenFrame?: PaintFrame | null): void {
+    if (this.camera) this.keepPlaying(this.cameraVideo);
+    if (this.screen) this.keepPlaying(this.screenVideo);
     const { ctx, canvas } = this;
     ctx.fillStyle = "#0c0d12";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    const screenReady = this.screen && this.screenVideo.readyState >= 2 && this.screenVideo.videoWidth > 0;
-    const cameraReady = this.camera && this.cameraVideo.readyState >= 2 && this.cameraVideo.videoWidth > 0;
+    const screenSource = screenFrame ?? this.screenImage();
+    const cameraSource = this.cameraImage();
 
-    if (screenReady) {
-      ctx.drawImage(this.screenVideo, 0, 0, canvas.width, canvas.height);
-      if (cameraReady) {
+    if (this.screen && screenSource) {
+      ctx.drawImage(screenSource, 0, 0, canvas.width, canvas.height);
+      if (cameraSource) {
         const rect = overlayPixels(this.overlay, canvas.width, canvas.height, this.cameraAspect);
-        this.drawCameraPip(rect.x, rect.y, rect.width, rect.height);
+        this.drawCameraPip(cameraSource, rect.x, rect.y, rect.width, rect.height);
       }
       return;
     }
 
-    if (cameraReady) {
-      ctx.drawImage(this.cameraVideo, 0, 0, canvas.width, canvas.height);
+    if (cameraSource) {
+      ctx.drawImage(cameraSource, 0, 0, canvas.width, canvas.height);
     }
   }
 
-  private drawCameraPip(x: number, y: number, width: number, height: number): void {
+  private drawCameraPip(
+    source: CanvasImageSource,
+    x: number,
+    y: number,
+    width: number,
+    height: number,
+  ): void {
     const { ctx } = this;
     const radius = pipCornerRadius(width, height);
     ctx.save();
     pathRoundedRect(ctx, x, y, width, height, radius);
     ctx.clip();
-    ctx.drawImage(this.cameraVideo, x, y, width, height);
+    ctx.drawImage(source, x, y, width, height);
     ctx.restore();
   }
 

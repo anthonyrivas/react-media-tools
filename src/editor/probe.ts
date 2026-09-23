@@ -10,6 +10,7 @@ export type ProbedMedia = {
   width: number;
   height: number;
   hasAudio: boolean;
+  hasVideo: boolean;
 };
 
 export type ProbeHints = {
@@ -40,6 +41,10 @@ export async function probeMedia(file: Blob, hints?: ProbeHints): Promise<Probed
     width,
     height,
     hasAudio: fromDecoder?.hasAudio ?? fromElement?.hasAudio ?? false,
+    hasVideo:
+      fromDecoder?.hasVideo ??
+      fromElement?.hasVideo ??
+      Boolean((hints?.width ?? 0) > 0 && (hints?.height ?? 0) > 0),
   };
 }
 
@@ -57,6 +62,7 @@ async function probeWithDecoder(file: Blob): Promise<ProbedMedia | null> {
       width: video ? await video.getDisplayWidth() : 0,
       height: video ? await video.getDisplayHeight() : 0,
       hasAudio: Boolean(audio),
+      hasVideo: Boolean(video),
     };
   } catch {
     return null;
@@ -65,7 +71,7 @@ async function probeWithDecoder(file: Blob): Promise<ProbedMedia | null> {
   }
 }
 
-function isAudioBlob(file: Blob): boolean {
+export function looksLikeAudioFile(file: Blob): boolean {
   const type = file.type.toLowerCase();
   if (type.startsWith("audio/")) return true;
   if (type.startsWith("video/")) return false;
@@ -74,7 +80,7 @@ function isAudioBlob(file: Blob): boolean {
 }
 
 async function probeWithElement(file: Blob): Promise<ProbedMedia | null> {
-  if (isAudioBlob(file)) return probeWithAudioElement(file);
+  if (looksLikeAudioFile(file)) return probeWithAudioElement(file);
 
   const session = openVideoBlob(file);
   try {
@@ -88,6 +94,7 @@ async function probeWithElement(file: Blob): Promise<ProbedMedia | null> {
       width,
       height,
       hasAudio: false,
+      hasVideo: Boolean(width && height),
     };
   } catch {
     return null;
@@ -110,6 +117,7 @@ async function probeWithAudioElement(file: Blob): Promise<ProbedMedia | null> {
       width: 0,
       height: 0,
       hasAudio: true,
+      hasVideo: false,
     };
   } catch {
     return null;
