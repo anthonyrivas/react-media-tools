@@ -360,4 +360,63 @@ describe("VideoEditor", () => {
     playSpy.mockRestore();
     pauseSpy.mockRestore();
   });
+
+  it("duplicates the selected picture clip after the original", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const ref = createRef<VideoEditorHandle>();
+    render(<VideoEditor ref={ref} onChange={onChange} />);
+
+    await ref.current?.addSource({
+      file: new Blob(["video"]),
+      name: "Take 1",
+      durationMs: 2000,
+      width: 640,
+      height: 360,
+    });
+    await waitFor(() => expect(screen.getByText("Take 1")).toBeInTheDocument());
+
+    await user.click(screen.getByRole("button", { name: "Duplicate" }));
+    await waitFor(() => {
+      const clips = onChange.mock.calls.at(-1)?.[0] as Array<{ id: string; inMs: number; outMs: number }>;
+      expect(clips).toHaveLength(2);
+      expect(clips[0]?.inMs).toBe(clips[1]?.inMs);
+      expect(clips[0]?.outMs).toBe(clips[1]?.outMs);
+      expect(clips[0]?.id).not.toBe(clips[1]?.id);
+    });
+    expect(screen.getAllByText("Take 1")).toHaveLength(2);
+  });
+
+  it("places a duplicated extra-audio clip after the original", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const ref = createRef<VideoEditorHandle>();
+    render(<VideoEditor ref={ref} onChange={onChange} />);
+
+    await ref.current?.addSource({
+      file: new Blob(["video"]),
+      name: "Take 1",
+      durationMs: 2000,
+      width: 640,
+      height: 360,
+    });
+    await waitFor(() => expect(screen.getByText("Take 1")).toBeInTheDocument());
+    await user.click(screen.getByRole("button", { name: "Unlink audio" }));
+    const audioClip = document.querySelector(".rmt-clip--audio");
+    expect(audioClip).toBeTruthy();
+    await user.click(audioClip as HTMLElement);
+    await user.click(screen.getByRole("button", { name: "Duplicate" }));
+
+    await waitFor(() => {
+      const clips = onChange.mock.calls.at(-1)?.[0] as Array<{
+        kind?: string;
+        startMs?: number;
+        outMs: number;
+        inMs: number;
+      }>;
+      const audios = clips.filter((clip) => clip.kind === "audio");
+      expect(audios).toHaveLength(2);
+      expect(audios[1]?.startMs).toBe((audios[0]?.startMs ?? 0) + (audios[0]?.outMs ?? 0) - (audios[0]?.inMs ?? 0));
+    });
+  });
 });

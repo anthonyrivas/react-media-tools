@@ -27,6 +27,7 @@ import {
   IconTrash,
   IconUndo,
   IconUnlink,
+  IconDuplicate,
 } from "../icons";
 import { extractPeaks } from "./waveform";
 import {
@@ -48,6 +49,7 @@ import {
   clipDuration,
   clipHasPlayableAudio,
   clipStartMs,
+  duplicateClip,
   hasDetachedAudio,
   isAudioClip,
   isVideoClip,
@@ -60,6 +62,7 @@ import {
 export type VideoEditorHandle = {
   addSource: (input: EditorInput | Blob, name?: string) => Promise<void>;
   split: (allTracks?: boolean) => void;
+  duplicateSelected: () => void;
   deleteSelected: () => void;
   undo: () => void;
   redo: () => void;
@@ -1021,6 +1024,29 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
       [captureThumb, onChange, recordHistory],
     );
 
+    const duplicateSelected = useCallback(() => {
+      const clipsNow = clipsRef.current;
+      const index = clipsNow.findIndex((clip) => clip.id === selectedIdRef.current);
+      const clip = clipsNow[index];
+      if (!clip) return;
+      recordHistory();
+      const copy = withClampedAudio(duplicateClip(clip, uid("clip")));
+      const next = [...clipsNow.slice(0, index + 1), copy, ...clipsNow.slice(index + 1)];
+      clipsRef.current = next;
+      setClips(next);
+      onChange?.(next);
+      selectedIdRef.current = copy.id;
+      setSelectedId(copy.id);
+      if (isVideoClip(copy)) {
+        clipIndexRef.current = next.findIndex((item) => item.id === copy.id);
+        const inherited = thumbsRef.current[clip.id];
+        if (inherited) {
+          setClipThumbs((current) => ({ ...current, [copy.id]: inherited }));
+        }
+        void captureThumb(copy);
+      }
+    }, [captureThumb, onChange, recordHistory]);
+
     const deleteSelected = useCallback(() => {
       const id = selectedIdRef.current;
       if (!id) return;
@@ -1142,6 +1168,7 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
       () => ({
         addSource,
         split,
+        duplicateSelected,
         deleteSelected,
         undo,
         redo,
@@ -1150,7 +1177,7 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
         normalizeSelected,
         unlinkSelected,
       }),
-      [addSource, deleteSelected, download, exportVideo, normalizeSelected, redo, split, undo, unlinkSelected],
+      [addSource, deleteSelected, download, duplicateSelected, exportVideo, normalizeSelected, redo, split, undo, unlinkSelected],
     );
 
     useEffect(() => {
@@ -1179,6 +1206,11 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
         if (meta && (event.key === "y" || event.key === "Y")) {
           event.preventDefault();
           redo();
+          return;
+        }
+        if (event.key === "d" || event.key === "D") {
+          event.preventDefault();
+          duplicateSelected();
           return;
         }
         if (meta) return;
@@ -1262,7 +1294,7 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
       };
       window.addEventListener("keydown", onKey);
       return () => window.removeEventListener("keydown", onKey);
-    }, [deleteSelected, handleScrub, redo, split, toggleMute, togglePlay, undo, unlinkSelected]);
+    }, [deleteSelected, duplicateSelected, handleScrub, redo, split, toggleMute, togglePlay, undo, unlinkSelected]);
 
     const shortcutMod =
       typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘" : "Ctrl";
@@ -1300,6 +1332,9 @@ export const VideoEditor = forwardRef<VideoEditorHandle, VideoEditorProps>(
               onClick={() => split(true)}
             >
               <IconSplitTracks />
+            </IconButton>
+            <IconButton label="Duplicate" shortcut="D" disabled={!selected} onClick={duplicateSelected}>
+              <IconDuplicate />
             </IconButton>
             <IconButton label="Delete" shortcut="Delete" disabled={!selected} onClick={deleteSelected}>
               <IconTrash />
