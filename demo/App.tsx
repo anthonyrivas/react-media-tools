@@ -111,6 +111,7 @@ export default function App() {
           <p>Chrome, Firefox, and Safari. Unavailable capture modes stay off.</p>
         </div>
         <VideoRecorder
+          showDownload
           onRecordingStop={(result) => void ingest(result)}
           onError={(error) => setMessage(error.message)}
         />
@@ -124,6 +125,7 @@ export default function App() {
         <VideoEditor
           ref={editorRef}
           showOpenFile
+          showDownload
           onExport={(result) => setMessage(`Exported ${result.filename}`)}
           onError={(error) => setMessage(error.message)}
         />
@@ -135,6 +137,7 @@ export default function App() {
           <p>Microphone only. Stop to send the take into the audio editor and the video editor audio track.</p>
         </div>
         <AudioRecorder
+          showDownload
           onRecordingStop={(result) => void ingestAudio(result)}
           onError={(error) => setAudioMessage(error.message)}
         />
@@ -148,6 +151,7 @@ export default function App() {
         <AudioEditor
           ref={audioEditorRef}
           showOpenFile
+          showDownload
           onExport={(result) => setAudioMessage(`Exported ${result.filename}`)}
           onError={(error) => setAudioMessage(error.message)}
         />
