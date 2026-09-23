@@ -242,6 +242,14 @@
   opacity: 1;
 }
 
+.rmt-recorder__source-video {
+  position: absolute;
+  width: 2px;
+  height: 2px;
+  opacity: 0.01;
+  pointer-events: none;
+}
+
 .rmt-recorder__stage,
 .rmt-editor__preview {
   position: relative;

@@ -30,4 +30,16 @@ describe("MediaComposer", () => {
     await expect(composer.startRecording()).rejects.toThrow(/not supported/);
     composer.destroy();
   });
+
+  it("keeps source videos in the document so camera frames keep decoding", () => {
+    const stage = document.createElement("div");
+    const node = canvas();
+    stage.appendChild(node);
+    document.body.appendChild(stage);
+    const composer = new MediaComposer(node);
+    expect(stage.querySelectorAll("video.rmt-recorder__source-video")).toHaveLength(2);
+    composer.destroy();
+    expect(stage.querySelectorAll("video")).toHaveLength(0);
+    stage.remove();
+  });
 });
