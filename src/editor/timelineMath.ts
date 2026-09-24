@@ -148,6 +148,26 @@ export function duplicateClip(clip: EditorClip, id: string): EditorClip {
   return copy;
 }
 
+export function splitVideoClip(clip: EditorClip, offsetMs: number, id: () => string): [EditorClip, EditorClip] | null {
+  const sourceLocal = clip.inMs + offsetMs;
+  if (sourceLocal <= clip.inMs + MIN_CLIP_MS || sourceLocal >= clip.outMs - MIN_CLIP_MS) return null;
+  return [
+    { ...clip, id: id(), outMs: sourceLocal },
+    { ...clip, id: id(), inMs: sourceLocal },
+  ];
+}
+
+export function splitAudioClip(clip: EditorClip, playheadMs: number, id: () => string): [EditorClip, EditorClip] | null {
+  const start = audioClipStart(clip);
+  const local = playheadMs - start;
+  if (local <= MIN_CLIP_MS || local >= clipDuration(clip) - MIN_CLIP_MS) return null;
+  const sourceLocal = clip.inMs + local;
+  return [
+    { ...clip, id: id(), outMs: sourceLocal },
+    { ...clip, id: id(), inMs: sourceLocal, startMs: playheadMs },
+  ];
+}
+
 export function totalDuration(clips: EditorClip[]): number {
   return videoTrackClips(clips).reduce((sum, clip) => sum + clipDuration(clip), 0);
 }

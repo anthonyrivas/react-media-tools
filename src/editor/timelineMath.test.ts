@@ -27,6 +27,8 @@ import {
   duplicateClip,
   hasDetachedAudio,
   packAudioLanes,
+  splitAudioClip,
+  splitVideoClip,
   canSnapTrimToHovered,
   clampTrimIn,
   clampTrimOut,
@@ -210,6 +212,22 @@ describe("timelineMath", () => {
       outMs: 500,
     });
     expect(duplicateClip(audio, "a2").linkedClipId).toBeUndefined();
+  });
+
+  it("splits picture and extra audio at a local time when both sides stay long enough", () => {
+    let n = 0;
+    const id = () => `n${(n += 1)}`;
+    const picture = clip("v", 0, 2000);
+    expect(splitVideoClip(picture, 800, id)).toEqual([
+      { ...picture, id: "n1", outMs: 800 },
+      { ...picture, id: "n2", inMs: 800 },
+    ]);
+    expect(splitVideoClip(picture, 50, id)).toBeNull();
+    const audio: EditorClip = { id: "a", sourceId: "src", inMs: 0, outMs: 1000, kind: "audio", startMs: 200 };
+    expect(splitAudioClip(audio, 600, id)).toEqual([
+      { ...audio, id: "n3", outMs: 400 },
+      { ...audio, id: "n4", inMs: 400, startMs: 600 },
+    ]);
   });
 
   it("snaps a trim handle to a hovered clip's matching edge", () => {
