@@ -1,6 +1,17 @@
-import { filenameFor, isSafariLike, pickAudioMimeType } from "../browser";
+import { filenameFor, pickAudioMimeType } from "../browser";
 import type { AudioRecordingResult, RecorderStatus } from "../types";
 import { stopStream } from "../utils";
+import { requestMicrophone } from "./composerCapture";
+import {
+  appendRecorderChunk,
+  collectRecorderBlob,
+  createSerialQueue,
+  pauseMediaRecorder,
+  recordingDurationMs,
+  resumeMediaRecorder,
+  startChunkRecorder,
+  startStatusTick,
+} from "./recorderSession";
 
 export type AudioCaptureCapabilities = {
   microphone: boolean;
@@ -60,8 +71,8 @@ export class AudioCapture {
   private chunks: Blob[] = [];
 
   private raf = 0;
-  private tick: number | null = null;
-  private queue: Promise<unknown> = Promise.resolve();
+  private stopTick: (() => void) | null = null;
+  private queue = createSerialQueue();
   private destroyed = false;
 
   private status: RecorderStatus = "idle";
@@ -101,7 +112,7 @@ export class AudioCapture {
   }
 
   async startRecording(): Promise<void> {
-    await this.enqueue(async () => {
+    await this.queue.enqueue(async () => {
       if (this.status === "recording") return;
       if (this.status === "paused" && this.recorder) {
         this.resumeRecording();
@@ -117,14 +128,7 @@ export class AudioCapture {
 
       this.error = null;
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          audio: {
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true,
-          },
-          video: false,
-        });
+        const stream = await requestMicrophone();
         if (this.destroyed) {
           stopStream(stream);
           return;
@@ -150,18 +154,16 @@ export class AudioCapture {
         this.history.fill(0);
         this.historyIndex = 0;
         this.historyFilled = 0;
-        this.recorder = new MediaRecorder(stream, {
-          mimeType: mimeType || undefined,
-          audioBitsPerSecond: AUDIO_BITRATE,
-        });
-        this.recorder.addEventListener("dataavailable", this.onData);
-        if (isSafariLike()) this.recorder.start();
-        else this.recorder.start(250);
+        this.recorder = startChunkRecorder(
+          stream,
+          { mimeType, audioBitsPerSecond: AUDIO_BITRATE },
+          this.onData,
+        );
         this.startedAt = performance.now();
         this.pausedMs = 0;
         this.pausedAt = 0;
         this.status = "recording";
-        this.startTick();
+        this.beginTick();
         this.emit();
       } catch (error) {
         this.releaseMic();
@@ -174,57 +176,40 @@ export class AudioCapture {
   }
 
   pauseRecording(): void {
-    if (this.status !== "recording" || !this.recorder) return;
-    if (typeof this.recorder.pause !== "function") return;
-    if (this.recorder.state === "recording") this.recorder.pause();
-    this.pausedAt = performance.now();
+    const pausedAt = pauseMediaRecorder(this.recorder, this.status);
+    if (pausedAt == null) return;
+    this.pausedAt = pausedAt;
     this.status = "paused";
     this.emit();
   }
 
   resumeRecording(): void {
-    if (this.status !== "paused" || !this.recorder) return;
-    if (typeof this.recorder.resume === "function" && this.recorder.state === "paused") {
-      this.recorder.resume();
-    }
-    if (this.pausedAt) this.pausedMs += performance.now() - this.pausedAt;
+    const next = resumeMediaRecorder(this.recorder, this.status, this.pausedAt, this.pausedMs);
+    if (!next) return;
+    this.pausedMs = next.pausedMs;
     this.pausedAt = 0;
     this.status = "recording";
     this.emit();
   }
 
   async stopRecording(): Promise<AudioRecordingResult | null> {
-    return this.enqueue(async () => {
+    return this.queue.enqueue(async () => {
       const recorder = this.recorder;
       if (!recorder || (this.status !== "recording" && this.status !== "paused")) {
         return this.lastRecording;
       }
-      const result = await new Promise<AudioRecordingResult>((resolve, reject) => {
-        recorder.addEventListener(
-          "stop",
-          () => {
-            try {
-              const mimeType = recorder.mimeType || pickAudioMimeType() || "audio/webm";
-              const blob = new Blob(this.chunks, { type: mimeType });
-              resolve({
-                blob,
-                mimeType,
-                filename: filenameFor("audio", mimeType),
-                durationMs: this.currentDuration(),
-              });
-            } catch (error) {
-              reject(error);
-            }
-          },
-          { once: true },
-        );
-        if (recorder.state !== "inactive") recorder.stop();
-      });
+      const collected = await collectRecorderBlob(recorder, this.chunks, pickAudioMimeType() || "audio/webm");
+      const result: AudioRecordingResult = {
+        blob: collected.blob,
+        mimeType: collected.mimeType,
+        filename: filenameFor("audio", collected.mimeType),
+        durationMs: this.currentDuration(),
+      };
 
       recorder.removeEventListener("dataavailable", this.onData);
       this.recorder = null;
       this.lastRecording = result;
-      this.stopTick();
+      this.endTick();
       this.releaseMic();
       this.status = "idle";
       this.emit();
@@ -235,7 +220,7 @@ export class AudioCapture {
   destroy(): void {
     this.destroyed = true;
     cancelAnimationFrame(this.raf);
-    this.stopTick();
+    this.endTick();
     if (this.recorder && this.recorder.state !== "inactive") this.recorder.stop();
     this.recorder = null;
     this.releaseMic();
@@ -243,17 +228,8 @@ export class AudioCapture {
   }
 
   private onData = (event: BlobEvent): void => {
-    if (event.data.size > 0) this.chunks.push(event.data);
+    appendRecorderChunk(this.chunks, event);
   };
-
-  private enqueue<T>(work: () => Promise<T> | T): Promise<T> {
-    const run = this.queue.then(() => work());
-    this.queue = run.then(
-      () => undefined,
-      () => undefined,
-    );
-    return run;
-  }
 
   private connectAnalyser(stream: MediaStream): void {
     const Ctor = window.AudioContext || window.webkitAudioContext;
@@ -280,26 +256,23 @@ export class AudioCapture {
   }
 
   private currentDuration(): number {
-    if (this.status === "idle" || this.status === "preview" || !this.startedAt) {
-      return this.lastRecording?.durationMs ?? 0;
-    }
-    const pausedPortion =
-      this.status === "paused" && this.pausedAt
-        ? this.pausedMs + (performance.now() - this.pausedAt)
-        : this.pausedMs;
-    return Math.max(0, performance.now() - this.startedAt - pausedPortion);
+    return recordingDurationMs({
+      status: this.status,
+      startedAt: this.startedAt,
+      pausedAt: this.pausedAt,
+      pausedMs: this.pausedMs,
+      lastDurationMs: this.lastRecording?.durationMs,
+    });
   }
 
-  private startTick(): void {
-    this.stopTick();
-    this.tick = window.setInterval(() => this.emit(), 100);
+  private beginTick(): void {
+    this.endTick();
+    this.stopTick = startStatusTick(() => this.emit());
   }
 
-  private stopTick(): void {
-    if (this.tick != null) {
-      window.clearInterval(this.tick);
-      this.tick = null;
-    }
+  private endTick(): void {
+    this.stopTick?.();
+    this.stopTick = null;
   }
 
   private loop(): void {
