@@ -63,6 +63,14 @@ export function EditorShell({
   );
 }
 
+export function EditorToolbar({ children }: { children: ReactNode }) {
+  return (
+    <div className="rmt-editor__toolbar" role="toolbar" aria-label="Editor tools">
+      {children}
+    </div>
+  );
+}
+
 export function EditorTools({
   hasClips,
   selected,

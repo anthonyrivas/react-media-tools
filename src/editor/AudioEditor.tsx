@@ -1,15 +1,6 @@
 import { forwardRef, useImperativeHandle, useMemo, useRef } from "react";
 import type { EditorClip, EditorInput, ExportResult } from "../types";
 import { droppedMediaFiles } from "./shared/editorDom";
-import {
-  EditorError,
-  EditorExportBar,
-  EditorFileInput,
-  EditorMixerBar,
-  EditorPreviewFrame,
-  EditorShell,
-  EditorTools,
-} from "./shared/EditorChrome";
 import { useAudioEdits } from "./audio/useAudioEdits";
 import { useAudioPreview } from "./audio/useAudioPreview";
 import { useEditorHotkeys } from "./shared/useEditorHotkeys";
@@ -19,8 +10,9 @@ import { useEditorSession } from "./shared/useEditorSession";
 import { useEditorSources } from "./shared/useEditorSources";
 import { useEditorStatus } from "./shared/useEditorStatus";
 import { useFileDrop } from "./shared/useFileDrop";
-import { Timeline, type TimelineHandle } from "./timeline/Timeline";
-import { StageWaveform } from "./audio/StageWaveform";
+import { type TimelineHandle } from "./timeline/Timeline";
+import { AudioEditorLayout } from "./audio/AudioEditorChrome";
+import { audioEditorEmptyBody, audioEditorEmptyHint, audioMixerText } from "./audio/audioEditorView";
 import { clipGain } from "./shared/audioGain";
 import { locateClip, totalDuration } from "./timeline/timelineMath";
 
@@ -226,108 +218,61 @@ export const AudioEditor = forwardRef<AudioEditorHandle, AudioEditorProps>(funct
   const hit = locateClip(clips, playheadMs);
 
   return (
-    <EditorShell
+    <AudioEditorLayout
       rootRef={rootRef}
-      className={["rmt-editor--audio", className].filter(Boolean).join(" ")}
+      className={className}
       style={style}
-      label="Audio editor"
       busy={busy}
-      fileHover={drop.fileHover}
       drop={drop}
-    >
-      <div className="rmt-editor__toolbar" role="toolbar" aria-label="Editor tools">
-        <EditorTools
-          hasClips={clips.length > 0}
-          selected={Boolean(selected)}
-          busy={busy}
-          canUndo={canUndo}
-          canRedo={canRedo}
-          showOpenFile={showOpenFile}
-          onSplit={edits.split}
-          onDuplicate={edits.duplicateSelected}
-          onDelete={edits.deleteSelected}
-          onUndo={undo}
-          onRedo={redo}
-          onOpen={() => fileRef.current?.click()}
-        />
-        {showOpenFile && (
-          <EditorFileInput
-            fileRef={fileRef}
-            accept="audio/*,.webm,.m4a,.mp3,.ogg,.wav,.aac,.flac"
-            onFiles={(files) => files.forEach((file) => void addSource(file, file.name))}
-          />
-        )}
-        <EditorExportBar
-          exportLabel={exportLabel}
-          progress={progress}
-          disabled={!clips.length || busy}
-          onExport={() => void edits.exportAudio()}
-          showDownload={showDownload}
-          downloadLabel={downloadLabel}
-          canDownload={Boolean(lastExport && clips.length)}
-          onDownload={() => edits.download()}
-        />
-      </div>
-      <EditorMixerBar
-        muted={Boolean(selected?.muted)}
-        muteDisabled={!selected}
-        mutePressed={Boolean(selected?.muted)}
-        onMute={toggleMute}
-        gainPercent={gainPercent}
-        gainDisabled={!selected}
-        gainAriaText={`${gainPercent} percent`}
-        gainText={selected ? (selected.muted ? "Muted" : `${gainPercent}%`) : "—"}
-        onGain={handleGainInput}
-        onGainCommit={handleGainCommit}
-        normalizeDisabled={!selected || busy}
-        onNormalize={() => void normalizeSelected()}
-      />
-      <EditorPreviewFrame
-        playing={playing}
-        hasClips={clips.length > 0}
-        emptyTitle="No clips yet"
-        emptyBody={
-          showOpenFile
-            ? "Drop audio here, send a recording, or open a file."
-            : "Drop audio here, or send a recording."
-        }
-        playheadMs={playheadMs}
-        totalMs={totalMs}
-        onToggle={togglePlay}
-      >
-        <audio ref={audioRef} className="rmt-editor__audio" preload="auto" aria-hidden="true" />
-        {playheadClip && sourceMap[playheadClip.sourceId]?.peaks && (
-          <StageWaveform
-            peaks={sourceMap[playheadClip.sourceId]!.peaks!}
-            inMs={playheadClip.inMs}
-            outMs={playheadClip.outMs}
-            localMs={hit && hit.clip.id === playheadClip.id ? hit.offsetMs : 0}
-            gain={clipGain(playheadClip)}
-          />
-        )}
-      </EditorPreviewFrame>
-      <Timeline
-        ref={timelineRef}
-        clips={clips}
-        sources={sourceMap}
-        selectedId={selectedId}
-        playheadMs={playheadMs}
-        showFades
-        emptyHint={
-          showOpenFile
-            ? "Drop audio, send a recording, or open a file."
-            : "Drop audio, or send a recording."
-        }
-        onSelect={setSelectedId}
-        onSeek={edits.handleSeek}
-        onScrub={edits.handleScrub}
-        onTrim={edits.handleTrim}
-        onTrimEnd={edits.handleTrimEnd}
-        onFade={handleFade}
-        onFadeEnd={handleFadeEnd}
-        onReorder={edits.handleReorder}
-      />
-      <EditorError error={error} />
-    </EditorShell>
+      fileRef={fileRef}
+      showOpenFile={showOpenFile}
+      showDownload={showDownload}
+      exportLabel={exportLabel}
+      downloadLabel={downloadLabel}
+      clips={clips}
+      selected={selected}
+      gainPercent={gainPercent}
+      gainText={audioMixerText(selected, gainPercent)}
+      canUndo={canUndo}
+      canRedo={canRedo}
+      progress={progress}
+      lastExport={Boolean(lastExport)}
+      playing={playing}
+      emptyBody={audioEditorEmptyBody(showOpenFile)}
+      emptyHint={audioEditorEmptyHint(showOpenFile)}
+      playheadMs={playheadMs}
+      totalMs={totalMs}
+      audioRef={audioRef}
+      playheadClip={playheadClip}
+      playheadPeaks={playheadClip ? sourceMap[playheadClip.sourceId]?.peaks : undefined}
+      waveformLocalMs={hit && playheadClip && hit.clip.id === playheadClip.id ? hit.offsetMs : 0}
+      playheadGain={playheadClip ? clipGain(playheadClip) : 0}
+      sourceMap={sourceMap}
+      selectedId={selectedId}
+      timelineRef={timelineRef}
+      error={error}
+      onSplit={edits.split}
+      onDuplicate={edits.duplicateSelected}
+      onDelete={edits.deleteSelected}
+      onUndo={undo}
+      onRedo={redo}
+      onOpen={() => fileRef.current?.click()}
+      onFiles={(files) => files.forEach((file) => void addSource(file, file.name))}
+      onExport={() => void edits.exportAudio()}
+      onDownload={() => edits.download()}
+      onMute={toggleMute}
+      onGain={handleGainInput}
+      onGainCommit={handleGainCommit}
+      onNormalize={() => void normalizeSelected()}
+      onTogglePlay={togglePlay}
+      onSelect={setSelectedId}
+      onSeek={edits.handleSeek}
+      onScrub={edits.handleScrub}
+      onTrim={edits.handleTrim}
+      onTrimEnd={edits.handleTrimEnd}
+      onFade={handleFade}
+      onFadeEnd={handleFadeEnd}
+      onReorder={edits.handleReorder}
+    />
   );
 });
