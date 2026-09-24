@@ -20,6 +20,7 @@ Internal cleanup so the editors and timeline are easier to change and test. Beha
 - `MediaComposer` source capture, audio graph, hidden videos, and recorder session (queue, duration, pause/resume, chunk recorder) live beside the class. `AudioCapture` uses the same session helpers.
 - Editor internals sit in `shared/`, `timeline/`, `video/`, and `audio/`. Recorder internals sit in `shared/`, `video/`, and `audio/`. Public components stay at `editor/` and `recorder/` so package exports do not change.
 - Editor hotkeys resolve to commands beside the hook. Timeline clip layout/classes live in `timelineClipView`. `VideoRecorder` stage and source/action chrome live beside the component.
+- `AudioRecorder` stage and actions live beside the component. `VideoEditor` / `AudioEditor` layout chrome and empty/mixer copy live beside each editor. Timeline pointer-move and pointer-up dispatch by drag kind. Video export codec pick and picture-write loops sit beside `exportTimeline`.
 
 ### Fixed
 
