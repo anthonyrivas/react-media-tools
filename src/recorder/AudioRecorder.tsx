@@ -3,15 +3,18 @@ import {
   useCallback,
   useEffect,
   useImperativeHandle,
-  useMemo,
   useRef,
   useState,
 } from "react";
-import { IconButton } from "../IconButton";
-import { IconDownload, IconPause, IconPlay } from "../icons";
 import type { AudioRecordingResult } from "../types";
-import { downloadBlob, formatClock } from "../utils";
+import { downloadBlob } from "../utils";
 import { AudioCapture, type AudioCaptureSnapshot } from "./audio/AudioCapture";
+import { AudioRecorderActions, AudioRecorderStage } from "./audio/AudioRecorderChrome";
+import {
+  audioRecorderStartHint,
+  audioRecorderStatusAnnounce,
+  audioRecorderStatusLabel,
+} from "./audio/audioRecorderView";
 
 export type AudioRecorderHandle = {
   start: () => Promise<void>;
@@ -151,23 +154,8 @@ export const AudioRecorder = forwardRef<AudioRecorderHandle, AudioRecorderProps>
     const live = snap.status === "recording" || snap.status === "paused";
     const canPause =
       typeof MediaRecorder !== "undefined" && typeof MediaRecorder.prototype.pause === "function";
-    const canRecord = snap.capabilities.microphone && snap.capabilities.mediaRecorder && Boolean(snap.capabilities.mimeType);
-
-    const statusLabel = useMemo(() => {
-      if (snap.status === "recording") return `REC ${formatClock(snap.durationMs)}`;
-      if (snap.status === "paused") return `PAUSED ${formatClock(snap.durationMs)}`;
-      if (snap.hasRecording) return `Ready ${formatClock(snap.durationMs)}`;
-      return "Idle";
-    }, [snap.durationMs, snap.hasRecording, snap.status]);
-
-    const statusAnnounce = useMemo(() => {
-      if (snap.status === "recording") return "Recording audio";
-      if (snap.status === "paused") return "Audio recording paused";
-      if (snap.hasRecording) return "Audio take ready";
-      return "Audio recorder idle";
-    }, [snap.hasRecording, snap.status]);
-
-    const recordingHint = snap.capabilities.notes.recording ?? snap.capabilities.notes.microphone;
+    const canRecord =
+      snap.capabilities.microphone && snap.capabilities.mediaRecorder && Boolean(snap.capabilities.mimeType);
 
     return (
       <div
@@ -178,78 +166,30 @@ export const AudioRecorder = forwardRef<AudioRecorderHandle, AudioRecorderProps>
         aria-busy={busy}
       >
         <div className="rmt-sr-only" role="status" aria-live="polite">
-          {statusAnnounce}
+          {audioRecorderStatusAnnounce(snap.status, snap.hasRecording)}
         </div>
-        <div className="rmt-recorder__stage">
-          <canvas
-            ref={canvasRef}
-            className="rmt-recorder__canvas"
-            role="img"
-            aria-label="Microphone level"
-          />
-          {!live && (
-            <div className="rmt-recorder__empty">
-              <strong>{snap.hasRecording ? "Take ready" : "Start to record audio"}</strong>
-              <span>
-                {snap.hasRecording
-                  ? "Download the file, or start again to replace it."
-                  : "Uses the microphone. Stop to get an audio file."}
-              </span>
-            </div>
-          )}
-          <div className={`rmt-recorder__badge rmt-recorder__badge--${snap.status}`} aria-hidden="true">
-            <span className="rmt-recorder__dot" />
-            {statusLabel}
-          </div>
-        </div>
-
+        <AudioRecorderStage
+          canvasRef={canvasRef}
+          snap={snap}
+          live={live}
+          statusLabel={audioRecorderStatusLabel(snap.status, snap.durationMs, snap.hasRecording)}
+        />
         {showControls && (
-          <div className="rmt-recorder__controls">
-            <div className="rmt-recorder__actions" role="group" aria-label="Recording actions">
-              {snap.status === "recording" && canPause && (
-                <IconButton label="Pause" disabled={busy} onClick={pause}>
-                  <IconPause />
-                </IconButton>
-              )}
-              {snap.status === "paused" && (
-                <IconButton label="Resume" disabled={busy} onClick={resume}>
-                  <IconPlay />
-                </IconButton>
-              )}
-              {live ? (
-                <button
-                  type="button"
-                  className="rmt-btn rmt-btn--danger"
-                  onClick={() => void stop()}
-                  disabled={busy}
-                >
-                  {busy ? "Stopping…" : "Stop"}
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  className="rmt-btn rmt-btn--primary"
-                  onClick={() => void start()}
-                  disabled={busy || !canRecord}
-                  title={recordingHint}
-                  aria-label={recordingHint ? `Start. ${recordingHint}` : undefined}
-                >
-                  {busy ? "Starting…" : "Start"}
-                </button>
-              )}
-              {showDownload && (
-                <IconButton
-                  label="Download"
-                  disabled={!snap.hasRecording || live || busy}
-                  onClick={() => download()}
-                >
-                  <IconDownload />
-                </IconButton>
-              )}
-            </div>
-          </div>
+          <AudioRecorderActions
+            snap={snap}
+            busy={busy}
+            live={live}
+            canPause={canPause}
+            canRecord={canRecord}
+            showDownload={showDownload}
+            startHint={audioRecorderStartHint(snap.capabilities.notes)}
+            onPause={pause}
+            onResume={resume}
+            onStart={() => void start()}
+            onStop={() => void stop()}
+            onDownload={() => download()}
+          />
         )}
-
         {snap.error && (
           <p className="rmt-recorder__error" role="alert">
             {snap.error}
