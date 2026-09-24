@@ -12,8 +12,8 @@ import { IconButton } from "../IconButton";
 import { IconCamera, IconDownload, IconMic, IconPause, IconPlay, IconScreen, IconSpeaker } from "../icons";
 import type { CameraOverlay, RecordingResult, SourceName } from "../types";
 import { downloadBlob, formatClock } from "../utils";
-import { MediaComposer, type ComposerSnapshot } from "./MediaComposer";
-import { OverlayLayer } from "./OverlayLayer";
+import { MediaComposer, type ComposerSnapshot } from "./video/MediaComposer";
+import { OverlayLayer } from "./video/OverlayLayer";
 
 export type VideoRecorderHandle = {
   start: () => Promise<void>;

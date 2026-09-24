@@ -4,7 +4,7 @@ import { createRef } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { VideoEditorHandle } from "./VideoEditor";
 
-vi.mock("./probe", () => ({
+vi.mock("./shared/probe", () => ({
   probeMedia: vi.fn(async () => ({
     durationMs: 2000,
     width: 640,
@@ -17,23 +17,23 @@ vi.mock("./probe", () => ({
   looksLikeAudioFile: (file: Blob) => file.type.startsWith("audio/"),
 }));
 
-vi.mock("./waveform", () => ({
+vi.mock("./shared/waveform", () => ({
   extractPeaks: vi.fn(async () => null),
   paintWaveform: vi.fn(),
 }));
 
 const exportTimeline = vi.fn();
 const measureClipPeak = vi.fn(async () => 0.5);
-vi.mock("./exportTimeline", () => ({
+vi.mock("./video/exportTimeline", () => ({
   exportTimeline: (...args: unknown[]) => exportTimeline(...args),
 }));
-vi.mock("./exportAudio", () => ({
+vi.mock("./audio/exportAudio", () => ({
   measureClipPeak: (...args: unknown[]) => measureClipPeak(...args),
 }));
 
-import { probeMedia } from "./probe";
+import { probeMedia } from "./shared/probe";
 import { VideoEditor } from "./VideoEditor";
-import { NORMALIZE_PEAK } from "./audioGain";
+import { NORMALIZE_PEAK } from "./shared/audioGain";
 
 const exported = {
   blob: new Blob(["edit"]),

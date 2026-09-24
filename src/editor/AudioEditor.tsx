@@ -1,6 +1,6 @@
 import { forwardRef, useImperativeHandle, useMemo, useRef } from "react";
 import type { EditorClip, EditorInput, ExportResult } from "../types";
-import { droppedMediaFiles } from "./editorDom";
+import { droppedMediaFiles } from "./shared/editorDom";
 import {
   EditorError,
   EditorExportBar,
@@ -9,20 +9,20 @@ import {
   EditorPreviewFrame,
   EditorShell,
   EditorTools,
-} from "./EditorChrome";
-import { useAudioEdits } from "./useAudioEdits";
-import { useAudioPreview } from "./useAudioPreview";
-import { useEditorHotkeys } from "./useEditorHotkeys";
-import { createAudioSource, useEditorIngest, type LoadedAudioSource } from "./useEditorIngest";
-import { useEditorMixer } from "./useEditorMixer";
-import { useEditorSession } from "./useEditorSession";
-import { useEditorSources } from "./useEditorSources";
-import { useEditorStatus } from "./useEditorStatus";
-import { useFileDrop } from "./useFileDrop";
-import { Timeline, type TimelineHandle } from "./Timeline";
-import { StageWaveform } from "./StageWaveform";
-import { clipGain } from "./audioGain";
-import { locateClip, totalDuration } from "./timelineMath";
+} from "./shared/EditorChrome";
+import { useAudioEdits } from "./audio/useAudioEdits";
+import { useAudioPreview } from "./audio/useAudioPreview";
+import { useEditorHotkeys } from "./shared/useEditorHotkeys";
+import { createAudioSource, useEditorIngest, type LoadedAudioSource } from "./shared/useEditorIngest";
+import { useEditorMixer } from "./shared/useEditorMixer";
+import { useEditorSession } from "./shared/useEditorSession";
+import { useEditorSources } from "./shared/useEditorSources";
+import { useEditorStatus } from "./shared/useEditorStatus";
+import { useFileDrop } from "./shared/useFileDrop";
+import { Timeline, type TimelineHandle } from "./timeline/Timeline";
+import { StageWaveform } from "./audio/StageWaveform";
+import { clipGain } from "./shared/audioGain";
+import { locateClip, totalDuration } from "./timeline/timelineMath";
 
 export type AudioEditorHandle = {
   addSource: (input: EditorInput | Blob, name?: string) => Promise<void>;

@@ -11,7 +11,7 @@ import { IconButton } from "../IconButton";
 import { IconDownload, IconPause, IconPlay } from "../icons";
 import type { AudioRecordingResult } from "../types";
 import { downloadBlob, formatClock } from "../utils";
-import { AudioCapture, type AudioCaptureSnapshot } from "./AudioCapture";
+import { AudioCapture, type AudioCaptureSnapshot } from "./audio/AudioCapture";
 
 export type AudioRecorderHandle = {
   start: () => Promise<void>;

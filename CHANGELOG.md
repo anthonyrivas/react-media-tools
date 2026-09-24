@@ -18,6 +18,7 @@ Internal cleanup so the editors and timeline are easier to change and test. Beha
 - Timeline zoom, measure, playhead follow, and pointer gestures live in `useTimelineInteraction`. Split, unlink, duplicate, and delete list updates live in `editorOps`. Preview (live graph, extra audio, clock, blank frame) lives in `useVideoPreview` / `useAudioPreview`.
 - Ingest, thumbs, and timeline/export callbacks live in `useEditorIngest`, `useClipThumbs`, `useVideoEdits`, and `useAudioEdits`. Shared toolbar/mixer/preview chrome is `EditorChrome`. Composer drawing is `composerDraw`.
 - `MediaComposer` source capture, audio graph, hidden videos, and recorder session (queue, duration, pause/resume, chunk recorder) live beside the class. `AudioCapture` uses the same session helpers.
+- Editor internals sit in `shared/`, `timeline/`, `video/`, and `audio/`. Recorder internals sit in `shared/`, `video/`, and `audio/`. Public components stay at `editor/` and `recorder/` so package exports do not change.
 
 ## [0.4.0] - 2026-09-22
 

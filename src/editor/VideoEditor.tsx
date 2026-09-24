@@ -1,6 +1,6 @@
 import { forwardRef, useImperativeHandle, useMemo, useRef } from "react";
 import type { EditorClip, EditorInput, ExportResult } from "../types";
-import { droppedMediaFiles } from "./editorDom";
+import { droppedMediaFiles } from "./shared/editorDom";
 import {
   EditorError,
   EditorExportBar,
@@ -9,25 +9,25 @@ import {
   EditorPreviewFrame,
   EditorShell,
   EditorTools,
-} from "./EditorChrome";
-import { useClipThumbs } from "./useClipThumbs";
-import { useEditorHotkeys } from "./useEditorHotkeys";
-import { createVideoSource, useEditorIngest, type LoadedVideoSource } from "./useEditorIngest";
-import { useEditorMixer } from "./useEditorMixer";
-import { useEditorSession } from "./useEditorSession";
-import { useEditorSources } from "./useEditorSources";
-import { useEditorStatus } from "./useEditorStatus";
-import { useFileDrop } from "./useFileDrop";
-import { useVideoEdits } from "./useVideoEdits";
-import { useVideoPreview } from "./useVideoPreview";
-import { Timeline, type TimelineHandle } from "./Timeline";
+} from "./shared/EditorChrome";
+import { useClipThumbs } from "./video/useClipThumbs";
+import { useEditorHotkeys } from "./shared/useEditorHotkeys";
+import { createVideoSource, useEditorIngest, type LoadedVideoSource } from "./shared/useEditorIngest";
+import { useEditorMixer } from "./shared/useEditorMixer";
+import { useEditorSession } from "./shared/useEditorSession";
+import { useEditorSources } from "./shared/useEditorSources";
+import { useEditorStatus } from "./shared/useEditorStatus";
+import { useFileDrop } from "./shared/useFileDrop";
+import { useVideoEdits } from "./video/useVideoEdits";
+import { useVideoPreview } from "./video/useVideoPreview";
+import { Timeline, type TimelineHandle } from "./timeline/Timeline";
 import {
   clipHasPlayableAudio,
   hasDetachedAudio,
   isVideoClip,
   timelineDuration,
   videoTrackClips,
-} from "./timelineMath";
+} from "./timeline/timelineMath";
 
 export type VideoEditorHandle = {
   addSource: (input: EditorInput | Blob, name?: string) => Promise<void>;
