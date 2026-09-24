@@ -111,4 +111,45 @@ describe("waveform", () => {
       clip.remove();
     }
   });
+
+  it("parses rgb() fill, skips empty peaks, and draws without roundRect", () => {
+    const fill = vi.fn();
+    const arcTo = vi.fn();
+    const canvas = document.createElement("canvas");
+    canvas.style.setProperty("--rmt-on-stage", "rgb(10, 20, 30)");
+    Object.defineProperty(canvas, "clientWidth", { value: 40 });
+    Object.defineProperty(canvas, "clientHeight", { value: 20 });
+    canvas.getContext = () =>
+      ({
+        clearRect: vi.fn(),
+        createLinearGradient: vi.fn(() => ({ addColorStop: vi.fn() })),
+        fill,
+        beginPath: vi.fn(),
+        moveTo: vi.fn(),
+        arcTo,
+        closePath: vi.fn(),
+      }) as unknown as CanvasRenderingContext2D;
+
+    paintWaveform(canvas, peaks([]), 0, 1000);
+    expect(fill).not.toHaveBeenCalled();
+
+    const stops: string[] = [];
+    canvas.getContext = () =>
+      ({
+        clearRect: vi.fn(),
+        createLinearGradient: vi.fn(() => ({
+          addColorStop: (_stop: number, color: string) => {
+            stops.push(color);
+          },
+        })),
+        fill,
+        beginPath: vi.fn(),
+        moveTo: vi.fn(),
+        arcTo,
+        closePath: vi.fn(),
+      }) as unknown as CanvasRenderingContext2D;
+    paintWaveform(canvas, peaks(Array.from({ length: 20 }, () => 0.9)), 0, 1000);
+    expect(arcTo).toHaveBeenCalled();
+    expect(stops.some((color) => color.includes("10, 20, 30"))).toBe(true);
+  });
 });

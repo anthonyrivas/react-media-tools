@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { EditorClip } from "../../types";
 import {
   type DragSession,
@@ -7,6 +7,8 @@ import {
   formatLength,
   formatZoom,
   heldClipBox,
+  hoveredTrimClip,
+  hoveredTrimHandle,
   nextTrimFromPointer,
   playheadFromPointer,
   rulerTicks,
@@ -137,5 +139,57 @@ describe("timelineView", () => {
       hovered: extra,
     });
     expect(result).toMatchObject({ inMs: 0, outMs: 800, edge: "out", snapId: "a" });
+  });
+
+  it("returns null for a non-trim session and snaps an out-trim to the source end", () => {
+    const picture = clip("v", 0, 1000);
+    expect(
+      nextTrimFromPointer({
+        session: session({ kind: "move" }),
+        clip: picture,
+        clips: [picture],
+        sourceDurationMs: 4000,
+        cursorMs: 900,
+        pps: 1,
+        hold: null,
+        hoveredHandle: null,
+        hovered: null,
+      }),
+    ).toBeNull();
+    expect(
+      nextTrimFromPointer({
+        session: session({ kind: "out", originOut: 1000, originStart: 0 }),
+        clip: picture,
+        clips: [picture],
+        sourceDurationMs: 4000,
+        cursorMs: 4000,
+        pps: 1,
+        hold: null,
+        hoveredHandle: null,
+        hovered: null,
+      }),
+    ).toMatchObject({ inMs: 0, outMs: 4000, edge: "out" });
+  });
+
+  it("reads a hovered trim handle from the document stack", () => {
+    const picture = clip("v", 0, 1000);
+    const extra: EditorClip = { id: "a", sourceId: "src", inMs: 0, outMs: 500, kind: "audio", startMs: 800 };
+    const host = document.createElement("div");
+    host.setAttribute("data-clip-id", "a");
+    const handle = document.createElement("button");
+    handle.className = "rmt-clip__trim rmt-clip__trim--in";
+    handle.setAttribute("data-trim-edge", "in");
+    host.append(handle);
+    document.body.append(host);
+    const stack = [handle, host];
+    const fromPoint = vi.spyOn(document, "elementsFromPoint").mockReturnValue(stack as unknown as Element[]);
+    try {
+      expect(hoveredTrimHandle(10, 10, "v", [picture, extra], true)).toEqual({ clip: extra, edge: "in" });
+      expect(hoveredTrimClip(10, 10, "v", [picture, extra], true)?.id).toBe("a");
+      expect(hoveredTrimHandle(10, 10, "v", [picture, extra], false)).toBeNull();
+    } finally {
+      fromPoint.mockRestore();
+      host.remove();
+    }
   });
 });

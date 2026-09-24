@@ -1,4 +1,49 @@
 import { describe, expect, it, vi } from "vitest";
+
+vi.mock("mediabunny", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("mediabunny")>();
+  class FakeOutput {
+    state = "pending";
+    addAudioTrack(): void {}
+    async start() {
+      this.state = "started";
+    }
+    async finalize() {
+      this.state = "finalized";
+    }
+    async cancel() {
+      this.state = "canceled";
+    }
+  }
+  return {
+    ...actual,
+    Quality: class {
+      constructor(public q: string) {}
+    },
+    Mp4OutputFormat: class {
+      mimeType = "audio/mp4";
+      getSupportedAudioCodecs() {
+        return ["aac"];
+      }
+    },
+    WebMOutputFormat: class {
+      mimeType = "audio/webm";
+      getSupportedAudioCodecs() {
+        return ["opus"];
+      }
+    },
+    BufferTarget: class {
+      buffer = new Uint8Array([9, 8, 7]).buffer;
+    },
+    Output: FakeOutput,
+    AudioBufferSource: class {
+      async add() {}
+      close() {}
+    },
+    getFirstEncodableAudioCodec: async (_codecs: string[]) => _codecs[0] ?? null,
+  };
+});
+
 import { conformAudioBuffer, exportAudioTimeline, measureClipPeak } from "./exportAudio";
 
 class TestAudioBuffer {
@@ -32,6 +77,34 @@ function mono(samples: number[], sampleRate = 48000): AudioBuffer {
 describe("exportAudioTimeline", () => {
   it("refuses an empty timeline", async () => {
     await expect(exportAudioTimeline({ clips: [] })).rejects.toThrow(/at least one clip/);
+  });
+
+  it("pads silence when a clip has no decodable audio", async () => {
+    const progress = vi.fn();
+    const result = await exportAudioTimeline({
+      clips: [{ id: "a", sourceId: "src", inMs: 0, outMs: 250, file: new Blob(["not audio"]) }],
+      onProgress: progress,
+    });
+    expect(result.mimeType).toMatch(/^audio\//);
+    expect(result.filename).toMatch(/^audio-/);
+    expect(result.blob.size).toBeGreaterThan(0);
+    expect(progress).toHaveBeenCalledWith(1);
+  });
+
+  it("skips decode for a muted clip and still writes a pad", async () => {
+    const result = await exportAudioTimeline({
+      clips: [{ id: "a", sourceId: "src", inMs: 0, outMs: 120, muted: true, file: new Blob(["not audio"]) }],
+    });
+    expect(result.durationMs).toBeGreaterThan(0);
+  });
+
+  it("aborts before mixing clips", async () => {
+    await expect(
+      exportAudioTimeline({
+        clips: [{ id: "a", sourceId: "src", inMs: 0, outMs: 200, file: new Blob(["x"]) }],
+        signal: AbortSignal.abort(),
+      }),
+    ).rejects.toMatchObject({ name: "AbortError" });
   });
 });
 

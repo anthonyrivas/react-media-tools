@@ -99,6 +99,13 @@ describe("applyTimelineDragMove", () => {
     expect(ctx.onFade).toHaveBeenCalledWith("a", 120, 80);
     expect(ctx.setFadeTip).toHaveBeenCalledWith(expect.objectContaining({ edge: "in", ms: 120, x: 80 }));
   });
+
+  it("trims from the pointer when the source duration is known", () => {
+    const ctx = moveCtx();
+    applyTimelineDragMove(session({ kind: "out", id: "a", originOut: 1000, originStart: 0 }), pointer(800), ctx);
+    expect(ctx.onTrim).toHaveBeenCalledWith("a", 0, expect.any(Number), "out");
+    expect(ctx.setTrimTip).toHaveBeenCalled();
+  });
 });
 
 describe("finishTimelineDrag", () => {

@@ -67,4 +67,40 @@ describe("timelineClipView", () => {
     expect(view.inAwayWidth).toBe(400);
     expect(view.className).toContain("is-trim-snap");
   });
+
+  it("marks muted extra audio, drop targets, and out-trim overlays", () => {
+    const extra = clip("a", { kind: "audio", muted: true, startMs: 200 });
+    const view = timelineClipView({
+      variant: "audio",
+      clip: extra,
+      start: 200,
+      source: { name: "Mic", peaks: { durationMs: 2000, peaks: new Float32Array(4) } },
+      selected: false,
+      dropTarget: true,
+      snapTarget: false,
+      holdLayout: {
+        pps: 1,
+        total: 2000,
+        innerWidth: 400,
+        scrollLeft: 0,
+        originLeft: 0,
+        widths: { a: 180 },
+        lefts: { a: 200 },
+        starts: { a: 200 },
+        durations: { a: 2000 },
+      },
+      drag: drag({ kind: "out", id: "a", originIn: 0, originOut: 2000 }),
+      pps: 1,
+      allowFades: true,
+      clips: [extra],
+    });
+    expect(view.className).toContain("rmt-clip--audio");
+    expect(view.className).toContain("is-muted");
+    expect(view.className).toContain("is-drop-target");
+    expect(view.showWave).toBe(true);
+    expect(view.fadeUi).toBe(true);
+    expect(view.showOutAway).toBe(true);
+    expect(view.left).toBe(200);
+    expect(view.width).toBe(180);
+  });
 });
