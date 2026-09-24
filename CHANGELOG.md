@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-22
+
+Internal cleanup so the editors and timeline are easier to change and test. Behavior is meant to stay the same.
+
+### Changed
+
+- Shared editor helpers and hooks for clip lists, undo/redo, file drop, mixer (gain/mute/fades/normalize), hotkeys, playback clock, editor session (selection/playhead/sources/status), and media DOM (source ids, seek, drop filters). `VideoEditor` and `AudioEditor` no longer copy that logic.
+- Timeline clip rows, waveforms, and trim/fade tooltips live in `TimelineClip`. Layout and pointer math (ruler ticks, playhead mapping, trim snap, fade drags) live beside the view.
+- Timeline zoom, measure, playhead follow, and pointer gestures live in `useTimelineInteraction`. Split, unlink, duplicate, and delete list updates live in `editorOps`. Preview (live graph, extra audio, clock, blank frame) lives in `useVideoPreview` / `useAudioPreview`.
+- Ingest, thumbs, and timeline/export callbacks live in `useEditorIngest`, `useClipThumbs`, `useVideoEdits`, and `useAudioEdits`. Shared toolbar/mixer/preview chrome is `EditorChrome`. Composer drawing is `composerDraw`.
+- `MediaComposer` source capture, audio graph, hidden videos, and recorder session (queue, duration, pause/resume, chunk recorder) live beside the class. `AudioCapture` uses the same session helpers.
+
 ## [0.4.0] - 2026-09-22
 
 Puts clip audio controls and a second audio track into `VideoEditor`.
