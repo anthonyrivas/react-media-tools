@@ -15,6 +15,10 @@ import { filenameFor } from "../../browser";
 import type { EditorClip, ExportResult } from "../../types";
 import { applyEnvelopeToBuffer, clipGain, clipLengthMs } from "../shared/audioGain";
 
+/** Encoder layout. Mic recordings are often mono; pads and mixed clips must match this. */
+export const EXPORT_SAMPLE_RATE = 48000;
+export const EXPORT_CHANNELS = 2;
+
 export type AudioExportClip = EditorClip & { file: Blob };
 
 export async function measureClipPeak(file: Blob, inMs: number, outMs: number): Promise<number> {
@@ -93,7 +97,7 @@ export async function exportAudioTimeline(options: {
               throwIfAborted();
               const localMs = chunk.timestamp * 1000 - clip.inMs;
               const processed = applyEnvelopeToBuffer(chunk.buffer, clip, localMs);
-              await audioSource.add(processed);
+              await audioSource.add(conformAudioBuffer(processed));
               audioWritten += chunk.duration;
             }
           }
@@ -147,9 +151,44 @@ function peakOf(buffer: AudioBuffer): number {
   return peak;
 }
 
-function silentBuffer(durationSec: number, sampleRate = 48000, channels = 2): AudioBuffer {
-  const length = Math.max(1, Math.round(Math.max(durationSec, 0) * sampleRate));
-  return new AudioBuffer({ length, numberOfChannels: channels, sampleRate });
+function silentBuffer(durationSec: number): AudioBuffer {
+  const length = Math.max(1, Math.round(Math.max(durationSec, 0) * EXPORT_SAMPLE_RATE));
+  return new AudioBuffer({
+    length,
+    numberOfChannels: EXPORT_CHANNELS,
+    sampleRate: EXPORT_SAMPLE_RATE,
+  });
+}
+
+/** Copy `src` into stereo 48 kHz so every `AudioBufferSource.add` uses the same layout. */
+export function conformAudioBuffer(src: AudioBuffer): AudioBuffer {
+  if (src.sampleRate === EXPORT_SAMPLE_RATE && src.numberOfChannels === EXPORT_CHANNELS) return src;
+  const duration = src.length / src.sampleRate;
+  const length = Math.max(1, Math.round(duration * EXPORT_SAMPLE_RATE));
+  const dest = new AudioBuffer({
+    length,
+    numberOfChannels: EXPORT_CHANNELS,
+    sampleRate: EXPORT_SAMPLE_RATE,
+  });
+  const rateRatio = src.sampleRate / EXPORT_SAMPLE_RATE;
+  for (let ch = 0; ch < EXPORT_CHANNELS; ch += 1) {
+    const srcData = src.getChannelData(Math.min(ch, src.numberOfChannels - 1));
+    const destData = dest.getChannelData(ch);
+    if (src.sampleRate === EXPORT_SAMPLE_RATE) {
+      destData.set(srcData.subarray(0, Math.min(src.length, length)));
+      continue;
+    }
+    for (let i = 0; i < length; i += 1) {
+      const srcIndex = i * rateRatio;
+      const i0 = Math.min(src.length - 1, Math.max(0, Math.floor(srcIndex)));
+      const i1 = Math.min(src.length - 1, i0 + 1);
+      const frac = srcIndex - Math.floor(srcIndex);
+      const s0 = srcData[i0] ?? 0;
+      const s1 = srcData[i1] ?? s0;
+      destData[i] = s0 + (s1 - s0) * frac;
+    }
+  }
+  return dest;
 }
 
 async function decodeAudio(file: Blob) {

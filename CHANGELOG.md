@@ -20,6 +20,10 @@ Internal cleanup so the editors and timeline are easier to change and test. Beha
 - `MediaComposer` source capture, audio graph, hidden videos, and recorder session (queue, duration, pause/resume, chunk recorder) live beside the class. `AudioCapture` uses the same session helpers.
 - Editor internals sit in `shared/`, `timeline/`, `video/`, and `audio/`. Recorder internals sit in `shared/`, `video/`, and `audio/`. Public components stay at `editor/` and `recorder/` so package exports do not change.
 
+### Fixed
+
+- Audio editor export always sends stereo 48 kHz buffers to the encoder, so a mono recording no longer fails when a stereo silence pad is appended.
+
 ## [0.4.0] - 2026-09-22
 
 Puts clip audio controls and a second audio track into `VideoEditor`.
