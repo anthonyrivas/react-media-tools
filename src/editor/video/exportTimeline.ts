@@ -38,18 +38,23 @@ type AudioStem = {
   buffer: AudioBuffer;
 };
 
-export async function exportTimeline(options: {
-  clips: ExportClip[];
-  width: number;
-  height: number;
-  onProgress?: (value: number) => void;
-  signal?: AbortSignal;
-}): Promise<ExportResult> {
-  const { clips, width, height, onProgress, signal } = options;
-  const picture = clips.filter((clip) => clip.kind !== "audio");
-  const extras = clips.filter((clip) => clip.kind === "audio");
-  if (!picture.length) throw new Error("Add at least one clip before exporting.");
+export function pictureAndExtraClips(clips: ExportClip[]): { picture: ExportClip[]; extras: ExportClip[] } {
+  return {
+    picture: clips.filter((clip) => clip.kind !== "audio"),
+    extras: clips.filter((clip) => clip.kind === "audio"),
+  };
+}
 
+export function exportTimelineLengthMs(picture: ExportClip[], extras: ExportClip[]): number {
+  const pictureMs = picture.reduce((sum, clip) => sum + clipLengthMs(clip), 0);
+  const extraEndMs = extras.reduce(
+    (max, clip) => Math.max(max, Math.max(0, clip.startMs ?? 0) + clipLengthMs(clip)),
+    0,
+  );
+  return Math.max(pictureMs, extraEndMs);
+}
+
+async function pickExportMuxer(width: number, height: number) {
   const quality = new Quality("high");
   const mp4 = new Mp4OutputFormat();
   let videoCodec = await getFirstEncodableVideoCodec(mp4.getSupportedVideoCodecs(), {
@@ -58,7 +63,7 @@ export async function exportTimeline(options: {
     quality,
   });
   let audioCodec = await getFirstEncodableAudioCodec(mp4.getSupportedAudioCodecs(), { quality });
-  let format = mp4 as Mp4OutputFormat | WebMOutputFormat;
+  let format: Mp4OutputFormat | WebMOutputFormat = mp4;
 
   if (!videoCodec) {
     const webm = new WebMOutputFormat();
@@ -75,6 +80,22 @@ export async function exportTimeline(options: {
     throw new Error("This browser cannot encode video. Export needs WebCodecs (Chrome, Firefox, or Safari 16.4+).");
   }
 
+  return { quality, format, videoCodec, audioCodec };
+}
+
+export async function exportTimeline(options: {
+  clips: ExportClip[];
+  width: number;
+  height: number;
+  onProgress?: (value: number) => void;
+  signal?: AbortSignal;
+}): Promise<ExportResult> {
+  const { clips, width, height, onProgress, signal } = options;
+  const { picture, extras } = pictureAndExtraClips(clips);
+  if (!picture.length) throw new Error("Add at least one clip before exporting.");
+
+  const { quality, format, videoCodec, audioCodec } = await pickExportMuxer(width, height);
+
   const target = new BufferTarget();
   const output = new Output({ format, target });
   const canvas = createCanvas(width, height);
@@ -88,18 +109,10 @@ export async function exportTimeline(options: {
   });
   output.addVideoTrack(videoSource, { frameRate: 30 });
 
-  const audioSource = audioCodec
-    ? new AudioBufferSource({ codec: audioCodec, quality })
-    : null;
+  const audioSource = audioCodec ? new AudioBufferSource({ codec: audioCodec, quality }) : null;
   if (audioSource) output.addAudioTrack(audioSource);
 
-  const pictureMs = picture.reduce((sum, clip) => sum + clipLengthMs(clip), 0);
-  const extraEndMs = extras.reduce(
-    (max, clip) => Math.max(max, Math.max(0, clip.startMs ?? 0) + clipLengthMs(clip)),
-    0,
-  );
-  const totalMs = Math.max(pictureMs, extraEndMs);
-  let outputTime = 0;
+  const totalMs = exportTimelineLengthMs(picture, extras);
   const inputs: Input[] = [];
 
   const throwIfAborted = () => {
@@ -108,66 +121,17 @@ export async function exportTimeline(options: {
 
   try {
     await output.start();
-
-    for (const clip of picture) {
-      throwIfAborted();
-      const start = clip.inMs / 1000;
-      const end = Math.max(start + 0.05, clip.outMs / 1000);
-      const clipDuration = end - start;
-      let videoWritten = 0;
-
-      const decoded = await decodeClip(clip.file);
-
-      if (decoded) {
-        inputs.push(decoded.input);
-        if (decoded.videoTrack && (await decoded.videoTrack.canDecode())) {
-          const sink = new VideoSampleSink(decoded.videoTrack);
-          for await (const sample of sink.samples(start, end)) {
-            throwIfAborted();
-            ctx.fillStyle = "#000";
-            ctx.fillRect(0, 0, width, height);
-            const fitted = fitContain(sample.displayWidth, sample.displayHeight, width, height);
-            sample.draw(ctx, fitted.x, fitted.y, fitted.w, fitted.h);
-            const duration = sample.duration > 0 ? sample.duration : 1 / 30;
-            await videoSource.add(outputTime + videoWritten, duration);
-            videoWritten += duration;
-            sample.close();
-            onProgress?.(Math.min(0.8, (outputTime + videoWritten) / Math.max(totalMs / 1000, 0.001)));
-          }
-        }
-      }
-
-      if (videoWritten < 1 / 30) {
-        const rasterized = await rasterizeClip(clip.file, start, end, async (video) => {
-          throwIfAborted();
-          ctx.fillStyle = "#000";
-          ctx.fillRect(0, 0, width, height);
-          const fitted = fitContain(video.videoWidth || width, video.videoHeight || height, width, height);
-          ctx.drawImage(video, fitted.x, fitted.y, fitted.w, fitted.h);
-          await videoSource.add(outputTime + videoWritten, 1 / 30);
-          videoWritten += 1 / 30;
-          onProgress?.(Math.min(0.8, (outputTime + videoWritten) / Math.max(totalMs / 1000, 0.001)));
-        });
-        videoWritten = Math.max(videoWritten, rasterized);
-      }
-
-      if (videoWritten < 1 / 30) {
-        ctx.fillStyle = "#000";
-        ctx.fillRect(0, 0, width, height);
-        await videoSource.add(outputTime, clipDuration);
-        videoWritten = clipDuration;
-      }
-
-      outputTime += Math.max(videoWritten, clipDuration);
-    }
-
-    if (outputTime + 0.02 < totalMs / 1000) {
-      const pad = totalMs / 1000 - outputTime;
-      ctx.fillStyle = "#000";
-      ctx.fillRect(0, 0, width, height);
-      await videoSource.add(outputTime, pad);
-      outputTime += pad;
-    }
+    const outputTime = await writePictureTrack({
+      picture,
+      ctx,
+      videoSource,
+      width,
+      height,
+      totalMs,
+      throwIfAborted,
+      onProgress,
+      inputs,
+    });
 
     if (audioSource) {
       await writeMixedAudio({
@@ -205,6 +169,94 @@ export async function exportTimeline(options: {
   } finally {
     inputs.forEach((input) => input.dispose());
   }
+}
+
+type PictureWriteCtx = {
+  ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
+  videoSource: CanvasSource;
+  width: number;
+  height: number;
+  totalMs: number;
+  throwIfAborted: () => void;
+  onProgress?: (value: number) => void;
+  inputs: Input[];
+};
+
+async function writePictureTrack(
+  options: PictureWriteCtx & { picture: ExportClip[] },
+): Promise<number> {
+  const { picture, ...write } = options;
+  let outputTime = 0;
+
+  for (const clip of picture) {
+    outputTime += await writePictureClip({ ...write, clip, outputTime });
+  }
+
+  if (outputTime + 0.02 < options.totalMs / 1000) {
+    const pad = options.totalMs / 1000 - outputTime;
+    options.ctx.fillStyle = "#000";
+    options.ctx.fillRect(0, 0, options.width, options.height);
+    await options.videoSource.add(outputTime, pad);
+    outputTime += pad;
+  }
+
+  return outputTime;
+}
+
+async function writePictureClip(
+  options: PictureWriteCtx & { clip: ExportClip; outputTime: number },
+): Promise<number> {
+  const { clip, ctx, videoSource, width, height, outputTime, totalMs, throwIfAborted, onProgress, inputs } =
+    options;
+  throwIfAborted();
+  const start = clip.inMs / 1000;
+  const end = Math.max(start + 0.05, clip.outMs / 1000);
+  const clipDuration = end - start;
+  let videoWritten = 0;
+
+  const decoded = await decodeClip(clip.file);
+
+  if (decoded) {
+    inputs.push(decoded.input);
+    if (decoded.videoTrack && (await decoded.videoTrack.canDecode())) {
+      const sink = new VideoSampleSink(decoded.videoTrack);
+      for await (const sample of sink.samples(start, end)) {
+        throwIfAborted();
+        ctx.fillStyle = "#000";
+        ctx.fillRect(0, 0, width, height);
+        const fitted = fitContain(sample.displayWidth, sample.displayHeight, width, height);
+        sample.draw(ctx, fitted.x, fitted.y, fitted.w, fitted.h);
+        const duration = sample.duration > 0 ? sample.duration : 1 / 30;
+        await videoSource.add(outputTime + videoWritten, duration);
+        videoWritten += duration;
+        sample.close();
+        onProgress?.(Math.min(0.8, (outputTime + videoWritten) / Math.max(totalMs / 1000, 0.001)));
+      }
+    }
+  }
+
+  if (videoWritten < 1 / 30) {
+    const rasterized = await rasterizeClip(clip.file, start, end, async (video) => {
+      throwIfAborted();
+      ctx.fillStyle = "#000";
+      ctx.fillRect(0, 0, width, height);
+      const fitted = fitContain(video.videoWidth || width, video.videoHeight || height, width, height);
+      ctx.drawImage(video, fitted.x, fitted.y, fitted.w, fitted.h);
+      await videoSource.add(outputTime + videoWritten, 1 / 30);
+      videoWritten += 1 / 30;
+      onProgress?.(Math.min(0.8, (outputTime + videoWritten) / Math.max(totalMs / 1000, 0.001)));
+    });
+    videoWritten = Math.max(videoWritten, rasterized);
+  }
+
+  if (videoWritten < 1 / 30) {
+    ctx.fillStyle = "#000";
+    ctx.fillRect(0, 0, width, height);
+    await videoSource.add(outputTime, clipDuration);
+    videoWritten = clipDuration;
+  }
+
+  return Math.max(videoWritten, clipDuration);
 }
 
 async function writeMixedAudio(options: {
