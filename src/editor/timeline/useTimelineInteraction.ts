@@ -16,16 +16,12 @@ import {
   clampZoom,
   clipDuration,
   clipStartMs,
-  cutTimes,
   locateClip,
   playheadX,
-  snapThresholdMs,
-  snapValue,
   timelineDuration,
   timelineInnerWidth,
   timelineMsAtX,
   timelinePps,
-  videoTrackClips,
 } from "./timelineMath";
 import {
   type DragSession,
@@ -34,15 +30,11 @@ import {
   type TrimTip,
   type ZoomAnchor,
   clipDragSession,
-  fadeFromDelta,
-  hoveredTrimClip,
-  hoveredTrimHandle,
-  indexFromClientX,
   innerOriginLeft,
-  nextTrimFromPointer,
   playheadFromPointer,
   playheadLeftRef,
 } from "./timelineView";
+import { applyTimelineDragMove, finishTimelineDrag } from "./timelineDrag";
 
 type TimelineSourceDuration = { durationMs: number };
 
@@ -345,92 +337,23 @@ export function useTimelineInteraction({
       pendingMove.current = null;
       const session = drag.current;
       if (!event || !session) return;
-      const dx = event.clientX - session.startX;
-      if (Math.abs(dx) > 2) session.moved = true;
-
-      if (session.kind === "playhead") {
-        const ms = playheadFromPointer(event.clientX, clipsRef.current, ppsRef.current, scrollerRef.current);
-        if (ms != null) onScrubRef.current(ms);
-        return;
-      }
-
-      if (session.kind === "move") {
-        const nextIndex = indexFromClientX(
-          trackRef.current,
-          event.clientX,
-          videoTrackClips(clipsRef.current).length,
-        );
-        dropIndexRef.current = nextIndex;
-        setDropIndex(nextIndex);
-        return;
-      }
-
-      const ppsNow = ppsRef.current > 0 ? ppsRef.current : session.duration > 0 ? session.width / session.duration : 0;
-      const deltaMs = ppsNow > 0 ? dx / ppsNow : 0;
-
-      if (session.kind === "audioMove") {
-        const nextStart = Math.max(0, session.originStart + deltaMs);
-        const threshold = snapThresholdMs(ppsNow);
-        const snapped = snapValue(nextStart, cutTimes(clipsRef.current), threshold);
-        onMoveAudioRef.current?.(session.id, snapped);
-        return;
-      }
-
-      if (session.kind === "fadeIn" || session.kind === "fadeOut") {
-        const next = fadeFromDelta(session, deltaMs);
-        onFadeRef.current?.(session.id, next.fadeInMs, next.fadeOutMs);
-        setFadeTipRef.current({
-          edge: next.edge,
-          ms: next.ms,
-          x: event.clientX,
-          y: event.clientY,
-        });
-        return;
-      }
-
-      const clip = clipsRef.current.find((item) => item.id === session.id);
-      const source = clip ? sourcesRef.current[clip.sourceId] : undefined;
-      if (!clip || !source) return;
-      const hold = holdLayoutRef.current;
-      const originLeft = hold?.originLeft ?? innerOriginLeft(scrollerRef.current);
-      const cursorMs =
-        timelineMsAtX(event.clientX, originLeft, TRACK_PAD_PX, ppsNow) - (session.grabOffsetMs ?? 0);
-      const hoveredHandle = hoveredTrimHandle(
-        event.clientX,
-        event.clientY,
-        session.id,
-        clipsRef.current,
-        showAudioTrackRef.current,
-      );
-      const hovered =
-        hoveredHandle?.clip ??
-        hoveredTrimClip(
-          event.clientX,
-          event.clientY,
-          session.id,
-          clipsRef.current,
-          showAudioTrackRef.current,
-        );
-      const next = nextTrimFromPointer({
-        session,
-        clip,
+      applyTimelineDragMove(session, event, {
         clips: clipsRef.current,
-        sourceDurationMs: source.durationMs,
-        cursorMs,
-        pps: ppsNow,
-        hold,
-        hoveredHandle,
-        hovered,
-      });
-      if (!next) return;
-      setSnapTrimIdRef.current(next.snapId);
-      onTrimRef.current(session.id, next.inMs, next.outMs, next.edge);
-      setTrimTipRef.current({
-        edge: next.edge,
-        inMs: next.inMs,
-        outMs: next.outMs,
-        x: event.clientX,
-        y: event.clientY,
+        sources: sourcesRef.current,
+        pps: ppsRef.current,
+        scroller: scrollerRef.current,
+        track: trackRef.current,
+        hold: holdLayoutRef.current,
+        showAudioTrack: showAudioTrackRef.current,
+        dropIndexRef,
+        onScrub: onScrubRef.current,
+        onMoveAudio: onMoveAudioRef.current,
+        onFade: onFadeRef.current,
+        onTrim: onTrimRef.current,
+        setDropIndex,
+        setFadeTip: setFadeTipRef.current,
+        setTrimTip: setTrimTipRef.current,
+        setSnapTrimId: setSnapTrimIdRef.current,
       });
     };
 
@@ -448,32 +371,22 @@ export function useTimelineInteraction({
         pendingMove.current = event;
         flushMove();
       }
-      const dropAt = dropIndexRef.current;
-      if (session?.kind === "move" && session.moved && dropAt != null) {
-        const target = dropAt > session.index ? dropAt - 1 : dropAt;
-        if (target !== session.index) onReorderRef.current(session.index, target);
-      }
-      if (session?.kind === "in" || session?.kind === "out") {
-        skipFollow.current = true;
-        setHoldLayout(null);
-        setTrimTip(null);
-        setSnapTrimId(null);
-        onTrimEndRef.current();
-      }
-      if (session?.kind === "fadeIn" || session?.kind === "fadeOut") {
-        setFadeTip(null);
-        onFadeEndRef.current?.();
-      }
-      if (session?.kind === "audioMove") {
-        onMoveAudioEndRef.current?.();
-      }
-      if (session?.kind === "playhead") {
-        const ms = playheadFromPointer(event.clientX, clipsRef.current, ppsRef.current, scrollerRef.current);
-        if (ms != null) onSeekRef.current(ms);
-      } else if (session && !session.moved && (session.kind === "move" || session.kind === "audioMove")) {
-        const ms = playheadFromPointer(event.clientX, clipsRef.current, ppsRef.current, scrollerRef.current);
-        if (ms != null) onSeekRef.current(ms);
-      }
+      finishTimelineDrag(session, event, {
+        clips: clipsRef.current,
+        pps: ppsRef.current,
+        scroller: scrollerRef.current,
+        dropAt: dropIndexRef.current,
+        skipFollow,
+        onReorder: onReorderRef.current,
+        onTrimEnd: onTrimEndRef.current,
+        onFadeEnd: onFadeEndRef.current,
+        onMoveAudioEnd: onMoveAudioEndRef.current,
+        onSeek: onSeekRef.current,
+        setHoldLayout,
+        setTrimTip,
+        setSnapTrimId,
+        setFadeTip,
+      });
       drag.current = null;
       dropIndexRef.current = null;
       setDropIndex(null);
