@@ -2,7 +2,7 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createRef } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ComposerSnapshot } from "./MediaComposer";
+import type { ComposerSnapshot } from "./video/MediaComposer";
 import type { VideoRecorderHandle } from "./VideoRecorder";
 
 const { composer, resetComposer } = vi.hoisted(() => {
@@ -91,7 +91,7 @@ const { composer, resetComposer } = vi.hoisted(() => {
   };
 });
 
-vi.mock("./MediaComposer", () => ({
+vi.mock("./video/MediaComposer", () => ({
   MediaComposer: vi.fn(function MediaComposer() {
     return composer;
   }),
