@@ -9,6 +9,25 @@ class ResizeObserverStub {
 
 vi.stubGlobal("ResizeObserver", ResizeObserverStub);
 
+if (typeof AudioBuffer === "undefined") {
+  class TestAudioBuffer {
+    numberOfChannels: number;
+    length: number;
+    sampleRate: number;
+    private channels: Float32Array[];
+    constructor(options: { length: number; numberOfChannels: number; sampleRate: number }) {
+      this.length = options.length;
+      this.numberOfChannels = options.numberOfChannels;
+      this.sampleRate = options.sampleRate;
+      this.channels = Array.from({ length: options.numberOfChannels }, () => new Float32Array(options.length));
+    }
+    getChannelData(channel: number) {
+      return this.channels[channel] ?? new Float32Array(this.length);
+    }
+  }
+  vi.stubGlobal("AudioBuffer", TestAudioBuffer);
+}
+
 HTMLCanvasElement.prototype.getContext = function getContext() {
   return {
     canvas: this,
@@ -39,4 +58,8 @@ URL.revokeObjectURL ??= () => undefined;
 HTMLMediaElement.prototype.pause = function pause() {};
 HTMLMediaElement.prototype.load = function load() {};
 HTMLMediaElement.prototype.play = async function play() {};
+
+document.elementsFromPoint = function elementsFromPoint() {
+  return [];
+};
 

@@ -1,6 +1,8 @@
 node_modules
 dist
 demo-dist
+reports
+.stryker-tmp
 .DS_Store
 *.local
 .vite

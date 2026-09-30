@@ -2,7 +2,7 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createRef } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AudioCaptureSnapshot } from "./AudioCapture";
+import type { AudioCaptureSnapshot } from "./audio/AudioCapture";
 import type { AudioRecorderHandle } from "./AudioRecorder";
 
 const { capture, resetCapture } = vi.hoisted(() => {
@@ -68,7 +68,7 @@ const { capture, resetCapture } = vi.hoisted(() => {
   };
 });
 
-vi.mock("./AudioCapture", () => ({
+vi.mock("./audio/AudioCapture", () => ({
   AudioCapture: vi.fn(function AudioCapture() {
     return capture;
   }),

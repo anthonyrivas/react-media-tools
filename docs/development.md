@@ -22,6 +22,8 @@ npm run preview      # preview the demo build
 | --- | --- |
 | `src/` | Library (`VideoRecorder`, `AudioRecorder`, `VideoEditor`, `AudioEditor`, styles) |
 | `src/index.ts` | Package exports |
+| `src/editor/` | `VideoEditor` and `AudioEditor`. Internals: `shared/`, `timeline/`, `video/`, `audio/` |
+| `src/recorder/` | `VideoRecorder` and `AudioRecorder`. Internals: `shared/`, `video/`, `audio/` |
 | `src/styles.css` | Component CSS (copied to `dist/styles.css` on build) |
 | `demo/` | Vite playground |
 | `vite.lib.config.ts` | Library bundle |
